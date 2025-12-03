@@ -1,0 +1,39 @@
+PATH
+  remote: ../..
+  specs:
+    fastresize (1.0.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    benchmark-ips (2.14.0)
+    diff-lcs (1.6.2)
+    rake (13.3.1)
+    rake-compiler (1.3.0)
+      rake
+    rspec (3.13.2)
+      rspec-core (~> 3.13.0)
+      rspec-expectations (~> 3.13.0)
+      rspec-mocks (~> 3.13.0)
+    rspec-core (3.13.6)
+      rspec-support (~> 3.13.0)
+    rspec-expectations (3.13.5)
+      diff-lcs (>= 1.2.0, < 2.0)
+      rspec-support (~> 3.13.0)
+    rspec-mocks (3.13.7)
+      diff-lcs (>= 1.2.0, < 2.0)
+      rspec-support (~> 3.13.0)
+    rspec-support (3.13.6)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  benchmark-ips (~> 2.0)
+  fastresize!
+  rake (~> 13.0)
+  rake-compiler (~> 1.2)
+  rspec (~> 3.0)
+
+BUNDLED WITH
+   2.5.17

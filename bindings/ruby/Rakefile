@@ -1,0 +1,43 @@
+require 'rake/testtask'
+require 'rspec/core/rake_task'
+
+# Default task
+task default: :spec
+
+# RSpec task
+RSpec::Core::RakeTask.new(:spec) do |t|
+  t.pattern = 'spec/**/*_spec.rb'
+  t.rspec_opts = ['--format documentation', '--color']
+end
+
+# Benchmark task
+desc 'Run benchmarks'
+task :benchmark do
+  ENV['RUN_LARGE_BENCHMARKS'] = '1' if ENV['FULL_BENCHMARK']
+  sh 'rspec spec/benchmark_spec.rb --format documentation'
+end
+
+# Build task
+desc 'Build the native extension'
+task :build do
+  Dir.chdir('ext/fastresize') do
+    sh 'ruby extconf.rb'
+    sh 'make'
+  end
+end
+
+# Clean task
+desc 'Clean build artifacts'
+task :clean do
+  Dir.chdir('ext/fastresize') do
+    sh 'make clean' if File.exist?('Makefile')
+    rm_f 'Makefile'
+    rm_f '*.o'
+    rm_f '*.so'
+    rm_f '*.bundle'
+  end
+end
+
+# Rebuild task
+desc 'Clean and rebuild'
+task rebuild: [:clean, :build]

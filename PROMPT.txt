@@ -1,0 +1,17 @@
+@ARCHITECTURE.md
+Let start implement Phase 5.
+You also write the /tests/test_phase4.cpp  and /benchmark/bench_phase4.cpp to test it
+And write down the PHASE4_COMPLETE.md the same structure as @PHASE2_COMPLETE.md
+
+
+Xin chào, tôi vừa quay lại project này sau 1 thời gian dài. Cần
+1. Hãy kiểm tra, có vẻ chúng ta đã hoàn tất phase 5 và sau đó có 1 vài cải tiến về performance
+2. Chúng ta có vẻ đang để param option max speed gì gì đó để user tự chọn có dùng max hay ko? Khi max thì RAM sẽ cao
+3. hãy chạy thử benchmark trong ruby (đã có sẵn) xem kết quả đang thế nào?
+
+
+Tui có để tấm hình base đó
+hãy dùng cmd hay gì đó copy nó ra thành 500 tấm từ 1 đến 500
+dùng batch resize 500 tấm này giảm 60% kích thước
+kết quả cho vào images/output
+và đo benchmark xem chạy tốt bao lâu, CPU và RAM usage thế nào
