@@ -55,6 +55,7 @@ _deps/
 # Ruby
 *.gem
 *.rbc
+*.bundle
 /.config
 /coverage/
 /InstalledFiles
@@ -63,8 +64,24 @@ _deps/
 /test/tmp/
 /test/version_tmp/
 /tmp/
-/vendor/
-**/vendor/
+
+# Ruby bindings - vendor and build artifacts
+bindings/ruby/vendor/
+bindings/ruby/.bundle/
+bindings/ruby/Gemfile.lock
+bindings/ruby/ext/**/Makefile
+bindings/ruby/ext/**/mkmf.log
+bindings/ruby/ext/**/*.o
+bindings/ruby/ext/**/*.bundle
+bindings/ruby/ext/**/*.so
+bindings/ruby/lib/**/*.bundle
+bindings/ruby/lib/**/*.so
+bindings/ruby/.rspec_status
+
+# Development/test files (run locally, not needed in repo)
+bindings/ruby/spec/
+bindings/ruby/benchmark_*.rb
+bindings/ruby/test_*.rb
 
 # Test outputs
 test_output/
@@ -74,14 +91,27 @@ test_output/
 *.png
 *.webp
 
-# Prebuilt binaries (track these separately)
-# prebuilt/
-
-# Documentation builds
-/docs/_build/
+# Prebuilt binaries - DO NOT IGNORE, these are needed for gem distribution!
+# prebuilt/ should be tracked in git
 
 # Benchmark results
 /benchmark/results/
 
 # Large image directories
 images/
+local/
+
+# Tests and benchmarks (not needed for distribution)
+tests/
+benchmark/
+benchmark_imageflow/
+
+# Specific unwanted files (don't use broad patterns like *.txt)
+benmark_result.txt
+create_test_images.sh
+PROMPT.txt
+
+# Claude config
+.claude/
+/Users/canh.th/Desktop/fastgems/fast_resize/bindings/ruby/prebuilt/*
+!/Users/canh.th/Desktop/fastgems/fast_resize/bindings/ruby/prebuilt/.gitkeep

@@ -1,9 +1,48 @@
+/*
+ * FastResize - The Fastest Image Resizing Library On The Planet
+ * Copyright (C) 2025 Tran Huu Canh (0xTh3OKrypt) and FastResize Contributors
+ *
+ * Resize 1,000 images in 2 seconds. Up to 2.9x faster than libvips,
+ * 3.1x faster than imageflow. Uses 3-4x less RAM than alternatives.
+ *
+ * Author: Tran Huu Canh (0xTh3OKrypt)
+ * Email: tranhuucanh39@gmail.com
+ * Homepage: https://github.com/tranhuucanh/fast_resize
+ *
+ * BSD 3-Clause License
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include "internal.h"
 #include <cstdio>
 #include <cstring>
 #include <csetjmp>
 
-// Phase 3: Specialized codec headers
 #include <jpeglib.h>
 #include <png.h>
 #include <webp/decode.h>
@@ -11,7 +50,6 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-// Phase B Optimization #1: Memory-mapped I/O
 #ifndef _WIN32
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -21,14 +59,13 @@
 #include <windows.h>
 #endif
 
-// Phase B Optimization #4: SIMD Memory Copy
 #include "simd_utils.h"
 
 namespace fastresize {
 namespace internal {
 
 // ============================================
-// Memory-Mapped File (Phase B Optimization #1)
+// Memory-Mapped File
 // ============================================
 
 struct MappedFile {
@@ -142,16 +179,13 @@ ImageFormat detect_format(const std::string& path) {
 
     if (n < 4) return FORMAT_UNKNOWN;
 
-    // JPEG: FF D8 FF
     if (header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF)
         return FORMAT_JPEG;
 
-    // PNG: 89 50 4E 47
     if (header[0] == 0x89 && header[1] == 0x50 &&
         header[2] == 0x4E && header[3] == 0x47)
         return FORMAT_PNG;
 
-    // WEBP: RIFF...WEBP
     if (n >= 12 &&
         header[0] == 'R' && header[1] == 'I' &&
         header[2] == 'F' && header[3] == 'F' &&
@@ -159,7 +193,6 @@ ImageFormat detect_format(const std::string& path) {
         header[10] == 'B' && header[11] == 'P')
         return FORMAT_WEBP;
 
-    // BMP: BM
     if (header[0] == 'B' && header[1] == 'M')
         return FORMAT_BMP;
 
@@ -185,7 +218,7 @@ ImageFormat string_to_format(const std::string& str) {
 }
 
 // ============================================
-// JPEG Decoding (libjpeg-turbo)
+// JPEG Decoding
 // ============================================
 
 struct jpeg_error_mgr_ext {
@@ -205,10 +238,8 @@ ImageData decode_jpeg(const std::string& path) {
     data.height = 0;
     data.channels = 0;
 
-    // Phase B Optimization #1: Use memory-mapped I/O
     MappedFile mapped;
     if (!mapped.map(path)) {
-        // Fallback to traditional file I/O if mmap fails
         FILE* infile = fopen(path.c_str(), "rb");
         if (!infile) return data;
 
@@ -253,7 +284,6 @@ ImageData decode_jpeg(const std::string& path) {
         return data;
     }
 
-    // Use memory-mapped file
     struct jpeg_decompress_struct cinfo;
     struct jpeg_error_mgr_ext jerr;
 
@@ -266,13 +296,9 @@ ImageData decode_jpeg(const std::string& path) {
     }
 
     jpeg_create_decompress(&cinfo);
-
-    // Use jpeg_mem_src instead of jpeg_stdio_src
     jpeg_mem_src(&cinfo, (unsigned char*)mapped.data, mapped.size);
-
     jpeg_read_header(&cinfo, TRUE);
 
-    // Phase A Optimization #2: Use fast DCT for 5-10% speed improvement
     cinfo.dct_method = JDCT_IFAST;
     cinfo.do_fancy_upsampling = FALSE;
 
@@ -298,8 +324,24 @@ ImageData decode_jpeg(const std::string& path) {
 }
 
 // ============================================
-// PNG Decoding (libpng)
+// PNG Decoding
 // ============================================
+
+struct PngMemoryReader {
+    const unsigned char* data;
+    size_t size;
+    size_t offset;
+};
+
+static void png_read_from_memory(png_structp png, png_bytep out, png_size_t count) {
+    PngMemoryReader* reader = (PngMemoryReader*)png_get_io_ptr(png);
+    if (reader->offset + count > reader->size) {
+        png_error(png, "Read past end of data");
+        return;
+    }
+    memcpy(out, reader->data + reader->offset, count);
+    reader->offset += count;
+}
 
 ImageData decode_png(const std::string& path) {
     ImageData data;
@@ -308,31 +350,47 @@ ImageData decode_png(const std::string& path) {
     data.height = 0;
     data.channels = 0;
 
-    FILE* fp = fopen(path.c_str(), "rb");
-    if (!fp) return data;
+    MappedFile mapped;
+    PngMemoryReader mem_reader = {nullptr, 0, 0};
+    FILE* fp = nullptr;
+
+    bool use_mmap = mapped.map(path);
+    if (use_mmap) {
+        mem_reader.data = (const unsigned char*)mapped.data;
+        mem_reader.size = mapped.size;
+        mem_reader.offset = 0;
+    } else {
+        fp = fopen(path.c_str(), "rb");
+        if (!fp) return data;
+    }
 
     png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
     if (!png) {
-        fclose(fp);
+        if (fp) fclose(fp);
         return data;
     }
 
     png_infop info = png_create_info_struct(png);
     if (!info) {
         png_destroy_read_struct(&png, nullptr, nullptr);
-        fclose(fp);
+        if (fp) fclose(fp);
         return data;
     }
 
     if (setjmp(png_jmpbuf(png))) {
         png_destroy_read_struct(&png, &info, nullptr);
-        fclose(fp);
+        if (fp) fclose(fp);
         if (data.pixels) delete[] data.pixels;
         data.pixels = nullptr;
         return data;
     }
 
-    png_init_io(png, fp);
+    if (use_mmap) {
+        png_set_read_fn(png, &mem_reader, png_read_from_memory);
+    } else {
+        png_init_io(png, fp);
+    }
+
     png_read_info(png, info);
 
     data.width = png_get_image_width(png, info);
@@ -340,26 +398,20 @@ ImageData decode_png(const std::string& path) {
     png_byte color_type = png_get_color_type(png, info);
     png_byte bit_depth = png_get_bit_depth(png, info);
 
-    // Convert to 8-bit
     if (bit_depth == 16)
         png_set_strip_16(png);
 
-    // Convert palette to RGB
     if (color_type == PNG_COLOR_TYPE_PALETTE)
         png_set_palette_to_rgb(png);
 
-    // Convert grayscale < 8-bit to 8-bit
     if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
         png_set_expand_gray_1_2_4_to_8(png);
 
-    // Add alpha channel if there's transparency
     if (png_get_valid(png, info, PNG_INFO_tRNS))
         png_set_tRNS_to_alpha(png);
 
-    // Update info after transformations
     png_read_update_info(png, info);
 
-    // Determine channels
     switch (png_get_color_type(png, info)) {
         case PNG_COLOR_TYPE_GRAY:
             data.channels = 1;
@@ -390,13 +442,13 @@ ImageData decode_png(const std::string& path) {
 
     delete[] row_pointers;
     png_destroy_read_struct(&png, &info, nullptr);
-    fclose(fp);
+    if (fp) fclose(fp);
 
     return data;
 }
 
 // ============================================
-// WEBP Decoding (libwebp)
+// WEBP Decoding
 // ============================================
 
 ImageData decode_webp(const std::string& path) {
@@ -406,10 +458,8 @@ ImageData decode_webp(const std::string& path) {
     data.height = 0;
     data.channels = 0;
 
-    // Phase B Optimization #1: Use memory-mapped I/O
     MappedFile mapped;
     if (!mapped.map(path)) {
-        // Fallback to traditional file I/O
         FILE* fp = fopen(path.c_str(), "rb");
         if (!fp) return data;
 
@@ -459,14 +509,12 @@ ImageData decode_webp(const std::string& path) {
 
         size_t pixel_count = data.width * data.height * data.channels;
         data.pixels = new unsigned char[pixel_count];
-        // Phase B Optimization #4: Use SIMD-optimized memory copy
         fast_copy_aligned(data.pixels, webp_pixels, pixel_count);
         WebPFree(webp_pixels);
 
         return data;
     }
 
-    // Use memory-mapped file - no need to allocate and copy file data
     WebPBitstreamFeatures features;
     if (WebPGetFeatures((unsigned char*)mapped.data, mapped.size, &features) != VP8_STATUS_OK) {
         return data;
@@ -476,7 +524,6 @@ ImageData decode_webp(const std::string& path) {
     data.height = features.height;
     data.channels = features.has_alpha ? 4 : 3;
 
-    // Decode directly from mapped memory
     unsigned char* webp_pixels = nullptr;
     if (data.channels == 4) {
         webp_pixels = WebPDecodeRGBA((unsigned char*)mapped.data, mapped.size,
@@ -493,10 +540,8 @@ ImageData decode_webp(const std::string& path) {
         return data;
     }
 
-    // Copy to new[] buffer for consistent memory management
     size_t pixel_count = data.width * data.height * data.channels;
     data.pixels = new unsigned char[pixel_count];
-    // Phase B Optimization #4: Use SIMD-optimized memory copy
     fast_copy_aligned(data.pixels, webp_pixels, pixel_count);
     WebPFree(webp_pixels);
 
@@ -504,7 +549,7 @@ ImageData decode_webp(const std::string& path) {
 }
 
 // ============================================
-// Image Decoding (Phase 3: specialized decoders)
+// Image Decoding
 // ============================================
 
 ImageData decode_image(const std::string& path, ImageFormat format) {
@@ -514,7 +559,6 @@ ImageData decode_image(const std::string& path, ImageFormat format) {
     data.height = 0;
     data.channels = 0;
 
-    // Use specialized decoders for better performance
     switch (format) {
         case FORMAT_JPEG:
             return decode_jpeg(path);
@@ -523,7 +567,6 @@ ImageData decode_image(const std::string& path, ImageFormat format) {
         case FORMAT_WEBP:
             return decode_webp(path);
         case FORMAT_BMP:
-            // Use stb_image for BMP (simple format)
             data.pixels = stbi_load(path.c_str(),
                                    &data.width,
                                    &data.height,
@@ -531,7 +574,6 @@ ImageData decode_image(const std::string& path, ImageFormat format) {
                                    0);
             return data;
         default:
-            // Try stb_image as fallback
             data.pixels = stbi_load(path.c_str(),
                                    &data.width,
                                    &data.height,
@@ -543,9 +585,6 @@ ImageData decode_image(const std::string& path, ImageFormat format) {
 
 void free_image_data(ImageData& data) {
     if (data.pixels) {
-        // For WebP, use WebPFree; for others, use delete[]
-        // Since we can't easily distinguish, we'll standardize on delete[]
-        // and ensure WebP data is copied to a new[] buffer
         delete[] data.pixels;
         data.pixels = nullptr;
     }
@@ -556,11 +595,9 @@ void free_image_data(ImageData& data) {
 // ============================================
 
 bool get_image_dimensions(const std::string& path, int& width, int& height, int& channels) {
-    // Detect format first
     ImageFormat format = detect_format(path);
 
     if (format == FORMAT_WEBP) {
-        // Use WebP-specific info function
         FILE* fp = fopen(path.c_str(), "rb");
         if (!fp) return false;
 
@@ -594,7 +631,6 @@ bool get_image_dimensions(const std::string& path, int& width, int& height, int&
         delete[] file_data;
         return false;
     } else {
-        // Use stb_image for other formats (JPEG, PNG, BMP)
         int w, h, c;
         int result = stbi_info(path.c_str(), &w, &h, &c);
         if (result) {
@@ -607,5 +643,5 @@ bool get_image_dimensions(const std::string& path, int& width, int& height, int&
     }
 }
 
-} // namespace internal
-} // namespace fastresize
+}
+}

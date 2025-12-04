@@ -1,0 +1,571 @@
+name: Complete Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.1)'
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  # ============================================================================
+  # BUILD JOBS - Run in parallel
+  # ============================================================================
+
+  build-macos-arm64:
+    runs-on: macos-14  # M1 runner
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+          echo "📦 Building version: $VERSION"
+
+      - name: Install dependencies
+        run: |
+          set -e
+          brew install cmake pkg-config jpeg libpng webp
+
+          echo "=== Verifying installations ==="
+          which cmake
+          which pkg-config
+
+          echo "=== libjpeg-turbo version ==="
+          pkg-config --modversion libjpeg || echo "libjpeg not found via pkg-config"
+
+          echo "=== libpng version ==="
+          PKG_PNG_VER=$(pkg-config --modversion libpng)
+          echo "libpng version: $PKG_PNG_VER"
+
+          if [[ "$PKG_PNG_VER" < "1.6" ]]; then
+            echo "❌ ERROR: libpng version too old: $PKG_PNG_VER"
+            exit 1
+          fi
+
+          echo "=== libwebp version ==="
+          pkg-config --modversion libwebp || echo "libwebp not found"
+
+          echo "✅ All dependencies verified"
+
+      - name: Build binary
+        run: |
+          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="/opt/homebrew:$CMAKE_PREFIX_PATH"
+
+          chmod +x scripts/build-binaries.sh
+          ./scripts/build-binaries.sh || { echo "Build failed"; exit 1; }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: prebuilt/*.tar.gz
+
+  build-macos-x86_64:
+    runs-on: macos-13  # Intel runner
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+          echo "📦 Building version: $VERSION"
+
+      - name: Install dependencies
+        run: |
+          set -e
+          brew install cmake pkg-config jpeg libpng webp
+
+          echo "=== Verifying installations ==="
+          which cmake
+          which pkg-config
+
+          echo "=== libpng version ==="
+          PKG_PNG_VER=$(pkg-config --modversion libpng)
+          echo "libpng version: $PKG_PNG_VER"
+
+          if [[ "$PKG_PNG_VER" < "1.6" ]]; then
+            echo "❌ ERROR: libpng version too old: $PKG_PNG_VER"
+            exit 1
+          fi
+
+          echo "✅ All dependencies verified"
+
+      - name: Build binary
+        run: |
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="/usr/local:$CMAKE_PREFIX_PATH"
+
+          chmod +x scripts/build-binaries.sh
+          ./scripts/build-binaries.sh || { echo "Build failed"; exit 1; }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: prebuilt/*.tar.gz
+
+  build-linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+          echo "📦 Building version: $VERSION"
+
+      - name: Build static binary in Ubuntu 20.04 container
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v $PWD:/workspace \
+            -w /workspace \
+            ubuntu:20.04 \
+            bash -c "
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+
+              echo '📦 Installing build tools...'
+              apt-get update
+              apt-get install -y cmake pkg-config build-essential wget autoconf automake libtool
+
+              echo '📦 Building zlib from source (static)...'
+              cd /tmp
+              wget https://github.com/madler/zlib/releases/download/v1.3/zlib-1.3.tar.gz
+              tar -xzf zlib-1.3.tar.gz
+              cd zlib-1.3
+              ./configure --static --prefix=/usr/local
+              make -j\$(nproc)
+              make install
+              echo '✅ zlib installed'
+
+              echo '📦 Building libpng from source (static)...'
+              cd /tmp
+              wget https://downloads.sourceforge.net/libpng/libpng-1.6.40.tar.gz
+              tar -xzf libpng-1.6.40.tar.gz
+              cd libpng-1.6.40
+              ./configure --enable-static --disable-shared --prefix=/usr/local
+              make -j\$(nproc)
+              make install
+              ldconfig
+              echo '✅ libpng installed'
+
+              echo '📦 Building libjpeg-turbo from source (static)...'
+              cd /tmp
+              wget https://github.com/libjpeg-turbo/libjpeg-turbo/archive/refs/tags/3.0.1.tar.gz
+              tar -xzf 3.0.1.tar.gz
+              cd libjpeg-turbo-3.0.1
+              cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DENABLE_SHARED=OFF -DENABLE_STATIC=ON
+              cmake --build build -j\$(nproc)
+              cmake --install build
+              ldconfig
+              echo '✅ libjpeg-turbo installed'
+
+              echo '📦 Building libwebp from source (static)...'
+              cd /tmp
+              wget https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.3.2.tar.gz
+              tar -xzf libwebp-1.3.2.tar.gz
+              cd libwebp-1.3.2
+              ./configure --enable-static --disable-shared --prefix=/usr/local
+              make -j\$(nproc)
+              make install
+              ldconfig
+              echo '✅ libwebp installed'
+
+              echo '🔨 Building fast_resize library...'
+              cd /workspace
+              chmod +x scripts/build-binaries.sh
+              ./scripts/build-binaries.sh
+
+              echo '🔍 Verifying binary...'
+              ls -la bindings/ruby/prebuilt/linux-x86_64/lib/
+
+              echo '✅ Build complete!'
+            "
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: prebuilt/*.tar.gz
+
+  build-linux-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+          echo "📦 Building version: $VERSION"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Build static binary in ARM64 container
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v $PWD:/workspace \
+            -w /workspace \
+            arm64v8/ubuntu:20.04 \
+            bash -c "
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+
+              echo '📦 Installing build tools...'
+              apt-get update
+              apt-get install -y cmake pkg-config build-essential wget autoconf automake libtool
+
+              echo '📦 Building zlib from source (static)...'
+              cd /tmp
+              wget https://github.com/madler/zlib/releases/download/v1.3/zlib-1.3.tar.gz
+              tar -xzf zlib-1.3.tar.gz
+              cd zlib-1.3
+              ./configure --static --prefix=/usr/local
+              make -j\$(nproc)
+              make install
+              echo '✅ zlib installed'
+
+              echo '📦 Building libpng from source (static)...'
+              cd /tmp
+              wget https://downloads.sourceforge.net/libpng/libpng-1.6.40.tar.gz
+              tar -xzf libpng-1.6.40.tar.gz
+              cd libpng-1.6.40
+              ./configure --enable-static --disable-shared --prefix=/usr/local
+              make -j\$(nproc)
+              make install
+              ldconfig
+              echo '✅ libpng installed'
+
+              echo '📦 Building libjpeg-turbo from source (static)...'
+              cd /tmp
+              wget https://github.com/libjpeg-turbo/libjpeg-turbo/archive/refs/tags/3.0.1.tar.gz
+              tar -xzf 3.0.1.tar.gz
+              cd libjpeg-turbo-3.0.1
+              cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DENABLE_SHARED=OFF -DENABLE_STATIC=ON
+              cmake --build build -j\$(nproc)
+              cmake --install build
+              ldconfig
+              echo '✅ libjpeg-turbo installed'
+
+              echo '📦 Building libwebp from source (static)...'
+              cd /tmp
+              wget https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.3.2.tar.gz
+              tar -xzf libwebp-1.3.2.tar.gz
+              cd libwebp-1.3.2
+              ./configure --enable-static --disable-shared --prefix=/usr/local
+              make -j\$(nproc)
+              make install
+              ldconfig
+              echo '✅ libwebp installed'
+
+              echo '🔨 Building fast_resize library...'
+              cd /workspace
+              chmod +x scripts/build-binaries.sh
+              ./scripts/build-binaries.sh
+
+              echo '🔍 Verifying binary...'
+              ls -la bindings/ruby/prebuilt/linux-aarch64/lib/
+
+              echo '✅ Build complete!'
+            "
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: prebuilt/*.tar.gz
+
+  # ============================================================================
+  # CREATE RELEASE - Wait for all builds
+  # ============================================================================
+
+  create-release:
+    needs: [build-macos-arm64, build-macos-x86_64, build-linux-x86_64, build-linux-arm64]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="v$VERSION"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            TAG=${GITHUB_REF#refs/tags/}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "📦 Creating release for version: $VERSION"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create source tarball
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          git archive --format=tar.gz --prefix=fast_resize-$VERSION/ HEAD > fast_resize-$VERSION.tar.gz
+          echo "Created source tarball: fast_resize-$VERSION.tar.gz"
+          shasum -a 256 fast_resize-$VERSION.tar.gz
+
+      - name: List artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          ls -R artifacts/
+          echo "Source tarball:"
+          ls -lh fast_resize-*.tar.gz
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: |
+            artifacts/*/*.tar.gz
+            fast_resize-*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================================
+  # UPDATE HOMEBREW - Wait for macOS builds only
+  # ============================================================================
+
+  update-homebrew:
+    needs: [build-macos-arm64, build-macos-x86_64, create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fast_resize repo
+        uses: actions/checkout@v3
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Version: $VERSION"
+
+      - name: Wait for release assets to be available
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          echo "⏳ Waiting for release assets to be available..."
+
+          MAX_WAIT=120
+          INTERVAL=10
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            if curl -f -s -L "https://github.com/tranhuucanh/fast_resize/releases/download/v${VERSION}/fast_resize-${VERSION}.tar.gz" > /dev/null 2>&1; then
+              echo "✅ Release assets are available!"
+              break
+            fi
+
+            echo "⏳ Still waiting... ($ELAPSED/$MAX_WAIT seconds)"
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          if [ $ELAPSED -ge $MAX_WAIT ]; then
+            echo "⚠️ Timeout waiting for release assets"
+            exit 1
+          fi
+
+      - name: Download and hash source tarball
+        id: source
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          curl -L -o source.tar.gz "https://github.com/tranhuucanh/fast_resize/releases/download/v${VERSION}/fast_resize-${VERSION}.tar.gz"
+          SHA256=$(shasum -a 256 source.tar.gz | cut -d' ' -f1)
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+          echo "🔐 Source SHA256: $SHA256"
+
+      - name: Checkout homebrew-fast_resize repo
+        uses: actions/checkout@v3
+        with:
+          repository: tranhuucanh/homebrew-fast_resize
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-fast_resize
+
+      - name: Update formula
+        run: |
+          cd homebrew-fast_resize
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA256="${{ steps.source.outputs.sha256 }}"
+
+          echo "🔄 Updating formula to version $VERSION"
+
+          sed -i "s/version \".*\"/version \"$VERSION\"/" Formula/fast_resize.rb
+          sed -i "s|url \".*\"|url \"https://github.com/tranhuucanh/fast_resize/releases/download/v$VERSION/fast_resize-$VERSION.tar.gz\"|" Formula/fast_resize.rb
+          sed -i "s/sha256 \".*\"/sha256 \"$SHA256\"/" Formula/fast_resize.rb
+
+          echo "✅ Formula updated:"
+          cat Formula/fast_resize.rb
+
+      - name: Commit and push
+        run: |
+          cd homebrew-fast_resize
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          git add Formula/fast_resize.rb
+          git commit -m "chore: update to v${{ steps.version.outputs.version }}"
+          git push
+
+  # ============================================================================
+  # PUBLISH TO RUBYGEMS - Wait for all builds + release
+  # ============================================================================
+
+  publish-gem:
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get version from previous job
+        id: version
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Publishing gem version: $VERSION"
+
+      - uses: actions/checkout@v3
+        with:
+          ref: v${{ steps.version.outputs.version }}
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: false
+
+      - name: Download pre-built binaries from release
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+
+          rm -rf bindings/ruby/prebuilt
+          mkdir -p bindings/ruby/prebuilt
+
+          echo "📥 Downloading macOS ARM64 binary..."
+          curl -L -o bindings/ruby/prebuilt/macos-arm64.tar.gz \
+            "https://github.com/tranhuucanh/fast_resize/releases/download/v${VERSION}/fast_resize-${VERSION}-macos-arm64.tar.gz"
+
+          echo "📥 Downloading macOS x86_64 binary..."
+          curl -L -o bindings/ruby/prebuilt/macos-x86_64.tar.gz \
+            "https://github.com/tranhuucanh/fast_resize/releases/download/v${VERSION}/fast_resize-${VERSION}-macos-x86_64.tar.gz"
+
+          echo "📥 Downloading Linux x86_64 binary..."
+          curl -L -o bindings/ruby/prebuilt/linux-x86_64.tar.gz \
+            "https://github.com/tranhuucanh/fast_resize/releases/download/v${VERSION}/fast_resize-${VERSION}-linux-x86_64.tar.gz"
+
+          echo "📥 Downloading Linux ARM64 binary..."
+          curl -L -o bindings/ruby/prebuilt/linux-aarch64.tar.gz \
+            "https://github.com/tranhuucanh/fast_resize/releases/download/v${VERSION}/fast_resize-${VERSION}-linux-aarch64.tar.gz"
+
+          cd bindings/ruby/prebuilt
+          echo "📦 Extracting binaries..."
+          tar -xzf macos-arm64.tar.gz
+          tar -xzf macos-x86_64.tar.gz
+          tar -xzf linux-x86_64.tar.gz
+          tar -xzf linux-aarch64.tar.gz
+
+          echo "✅ Downloaded and extracted pre-built binaries"
+          ls -lR
+
+      - name: Build gem
+        run: gem build fast_resize.gemspec
+
+      - name: Verify gem contents
+        run: |
+          echo "📦 Gem contents:"
+          tar -tzf fast_resize-*.gem | head -20
+          echo "..."
+          echo "Total files: $(tar -tzf fast_resize-*.gem | wc -l)"
+
+      - name: Publish to RubyGems
+        run: |
+          mkdir -p ~/.gem
+          cat > ~/.gem/credentials << EOF
+          ---
+          :rubygems_api_key: ${{ secrets.RUBYGEMS_API_KEY }}
+          EOF
+          chmod 0600 ~/.gem/credentials
+
+          gem push fast_resize-*.gem
+
+      - name: Summary
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          echo "✅ Published fast_resize-$VERSION to RubyGems!"
+          echo "🔗 https://rubygems.org/gems/fast_resize"
+
+  # ============================================================================
+  # FINAL SUMMARY
+  # ============================================================================
+
+  release-summary:
+    needs: [create-release, update-homebrew, publish-gem]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Release Summary
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          echo "=============================================="
+          echo "🎉 FastResize v$VERSION Release Complete!"
+          echo "=============================================="
+          echo ""
+          echo "✅ Binaries built for:"
+          echo "   - macOS (ARM64 + x86_64)"
+          echo "   - Linux (x86_64 + ARM64)"
+          echo ""
+          echo "✅ Published to:"
+          echo "   🍺 Homebrew: brew tap tranhuucanh/fast_resize && brew install fast_resize"
+          echo "   💎 RubyGems: https://rubygems.org/gems/fast_resize"
+          echo ""
+          echo "📊 GitHub Release: https://github.com/tranhuucanh/fast_resize/releases/tag/v$VERSION"
+          echo "=============================================="

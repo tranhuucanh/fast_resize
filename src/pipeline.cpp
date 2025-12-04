@@ -1,12 +1,48 @@
+/*
+ * FastResize - The Fastest Image Resizing Library On The Planet
+ * Copyright (C) 2025 Tran Huu Canh (0xTh3OKrypt) and FastResize Contributors
+ *
+ * Resize 1,000 images in 2 seconds. Up to 2.9x faster than libvips,
+ * 3.1x faster than imageflow. Uses 3-4x less RAM than alternatives.
+ *
+ * Author: Tran Huu Canh (0xTh3OKrypt)
+ * Email: tranhuucanh39@gmail.com
+ * Homepage: https://github.com/tranhuucanh/fast_resize
+ *
+ * BSD 3-Clause License
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include "pipeline.h"
 #include <thread>
 
 namespace fastresize {
 namespace internal {
-
-// ============================================
-// PipelineProcessor Implementation
-// ============================================
 
 PipelineProcessor::PipelineProcessor(
     size_t decode_threads,
@@ -25,20 +61,23 @@ PipelineProcessor::PipelineProcessor(
     decode_pool_ = create_thread_pool(decode_threads);
     resize_pool_ = create_thread_pool(resize_threads);
     encode_pool_ = create_thread_pool(encode_threads);
+
+    for (size_t i = 0; i < encode_threads; ++i) {
+        encode_buffer_pools_.push_back(create_buffer_pool());
+    }
 }
 
 PipelineProcessor::~PipelineProcessor() {
     if (decode_pool_) destroy_thread_pool(decode_pool_);
     if (resize_pool_) destroy_thread_pool(resize_pool_);
     if (encode_pool_) destroy_thread_pool(encode_pool_);
+
+    for (BufferPool* pool : encode_buffer_pools_) {
+        destroy_buffer_pool(pool);
+    }
 }
 
-// ============================================
-// Stage 1: Decode (I/O bound - 4 threads)
-// ============================================
-
 void PipelineProcessor::decode_stage(const std::vector<BatchItem>& items) {
-    // Enqueue decode tasks
     for (size_t i = 0; i < items.size(); ++i) {
         thread_pool_enqueue(decode_pool_, [this, &items, i]() {
             const auto& item = items[i];
@@ -49,7 +88,6 @@ void PipelineProcessor::decode_stage(const std::vector<BatchItem>& items) {
             result.options = item.options;
             result.success = false;
 
-            // Detect input format
             ImageFormat fmt = detect_format(item.input_path);
             if (fmt == FORMAT_UNKNOWN) {
                 result.error_message = "Unknown format: " + item.input_path;
@@ -57,7 +95,6 @@ void PipelineProcessor::decode_stage(const std::vector<BatchItem>& items) {
                 return;
             }
 
-            // Decode image
             result.image = decode_image(item.input_path, fmt);
             if (result.image.pixels == nullptr) {
                 result.error_message = "Decode failed: " + item.input_path;
@@ -70,21 +107,13 @@ void PipelineProcessor::decode_stage(const std::vector<BatchItem>& items) {
         });
     }
 
-    // Wait for all decode tasks to complete
     thread_pool_wait(decode_pool_);
-
-    // Signal decode queue is done
     decode_queue_.set_done();
 }
 
-// ============================================
-// Stage 2: Resize (CPU bound - 8 threads)
-// ============================================
-
 void PipelineProcessor::resize_stage() {
-    // Create resize worker threads
     std::vector<std::thread> workers;
-    for (size_t i = 0; i < 8; ++i) {  // 8 resize workers
+    for (size_t i = 0; i < 8; ++i) {
         workers.emplace_back([this]() {
             DecodeResult decode_result;
 
@@ -95,7 +124,6 @@ void PipelineProcessor::resize_stage() {
                 resize_result.options = decode_result.options;
                 resize_result.success = false;
 
-                // If decode failed, pass through
                 if (!decode_result.success) {
                     resize_result.error_message = decode_result.error_message;
                     resize_result.pixels = nullptr;
@@ -106,7 +134,6 @@ void PipelineProcessor::resize_stage() {
                     continue;
                 }
 
-                // Calculate output dimensions
                 int out_w, out_h;
                 calculate_dimensions(
                     decode_result.image.width,
@@ -115,7 +142,6 @@ void PipelineProcessor::resize_stage() {
                     out_w, out_h
                 );
 
-                // Resize image
                 unsigned char* resized_pixels = nullptr;
                 bool resize_ok = resize_image(
                     decode_result.image.pixels,
@@ -127,7 +153,6 @@ void PipelineProcessor::resize_stage() {
                     decode_result.options
                 );
 
-                // Free decode buffer
                 free_image_data(decode_result.image);
 
                 if (!resize_ok || resized_pixels == nullptr) {
@@ -150,28 +175,21 @@ void PipelineProcessor::resize_stage() {
         });
     }
 
-    // Wait for all resize workers
     for (auto& worker : workers) {
         worker.join();
     }
 
-    // Signal resize queue is done
     resize_queue_.set_done();
 }
 
-// ============================================
-// Stage 3: Encode (I/O bound - 4 threads)
-// ============================================
-
 void PipelineProcessor::encode_stage() {
-    // Create encode worker threads
     std::vector<std::thread> workers;
-    for (size_t i = 0; i < 4; ++i) {  // 4 encode workers
-        workers.emplace_back([this]() {
+    for (size_t i = 0; i < encode_buffer_pools_.size(); ++i) {
+        workers.emplace_back([this, i]() {
+            BufferPool* buffer_pool = encode_buffer_pools_[i];
             ResizeResult resize_result;
 
             while (resize_queue_.pop(resize_result)) {
-                // If resize failed, record error
                 if (!resize_result.success) {
                     failed_count_.fetch_add(1);
                     if (!resize_result.error_message.empty()) {
@@ -181,24 +199,20 @@ void PipelineProcessor::encode_stage() {
                     continue;
                 }
 
-                // Detect output format from file extension (not content, since file doesn't exist yet)
                 ImageFormat out_fmt = FORMAT_UNKNOWN;
                 size_t dot_pos = resize_result.output_path.find_last_of('.');
                 if (dot_pos != std::string::npos) {
                     std::string ext = resize_result.output_path.substr(dot_pos + 1);
-                    // Convert to lowercase
                     for (char& c : ext) {
                         if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
                     }
                     out_fmt = string_to_format(ext);
                 }
 
-                // Default to JPEG if unknown
                 if (out_fmt == FORMAT_UNKNOWN) {
                     out_fmt = FORMAT_JPEG;
                 }
 
-                // Validate data before encoding
                 if (resize_result.pixels == nullptr || resize_result.width <= 0 ||
                     resize_result.height <= 0 || resize_result.channels <= 0) {
                     failed_count_.fetch_add(1);
@@ -208,7 +222,6 @@ void PipelineProcessor::encode_stage() {
                     continue;
                 }
 
-                // Encode image
                 ImageData img_data;
                 img_data.pixels = resize_result.pixels;
                 img_data.width = resize_result.width;
@@ -219,10 +232,10 @@ void PipelineProcessor::encode_stage() {
                     resize_result.output_path,
                     img_data,
                     out_fmt,
-                    resize_result.options.quality
+                    resize_result.options.quality,
+                    buffer_pool
                 );
 
-                // Free resize buffer
                 delete[] resize_result.pixels;
 
                 if (encode_ok) {
@@ -240,33 +253,24 @@ void PipelineProcessor::encode_stage() {
         });
     }
 
-    // Wait for all encode workers
     for (auto& worker : workers) {
         worker.join();
     }
 }
 
-// ============================================
-// Main Pipeline Execution
-// ============================================
-
 BatchResult PipelineProcessor::process_batch(const std::vector<BatchItem>& items) {
-    // Reset counters
     success_count_ = 0;
     failed_count_ = 0;
     errors_.clear();
 
-    // Start all 3 stages concurrently
     std::thread decode_thread([this, &items]() { decode_stage(items); });
     std::thread resize_thread([this]() { resize_stage(); });
     std::thread encode_thread([this]() { encode_stage(); });
 
-    // Wait for all stages to complete
     decode_thread.join();
     resize_thread.join();
     encode_thread.join();
 
-    // Build result
     BatchResult result;
     result.total = items.size();
     result.success = success_count_.load();
@@ -276,5 +280,5 @@ BatchResult PipelineProcessor::process_batch(const std::vector<BatchItem>& items
     return result;
 }
 
-} // namespace internal
-} // namespace fastresize
+}
+}

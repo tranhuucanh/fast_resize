@@ -1,13 +1,49 @@
+/*
+ * FastResize - The Fastest Image Resizing Library On The Planet
+ * Copyright (C) 2025 Tran Huu Canh (0xTh3OKrypt) and FastResize Contributors
+ *
+ * Resize 1,000 images in 2 seconds. Up to 2.9x faster than libvips,
+ * 3.1x faster than imageflow. Uses 3-4x less RAM than alternatives.
+ *
+ * Author: Tran Huu Canh (0xTh3OKrypt)
+ * Email: tranhuucanh39@gmail.com
+ * Homepage: https://github.com/tranhuucanh/fast_resize
+ *
+ * BSD 3-Clause License
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include "internal.h"
 #include "pipeline.h"
 #include <cstring>
 #include <mutex>
 
 namespace fastresize {
-
-// ============================================
-// Error Handling (Thread-safe)
-// ============================================
 
 namespace {
     std::mutex error_mutex;
@@ -33,9 +69,42 @@ ErrorCode get_last_error_code() {
     return last_error_code;
 }
 
-// ============================================
-// Image Info
-// ============================================
+// Validate resize options
+static bool validate_options(const ResizeOptions& opts) {
+    switch (opts.mode) {
+        case ResizeOptions::SCALE_PERCENT:
+            if (opts.scale_percent <= 0) {
+                internal::set_last_error(RESIZE_ERROR, "Scale must be positive");
+                return false;
+            }
+            break;
+        case ResizeOptions::FIT_WIDTH:
+            if (opts.target_width <= 0) {
+                internal::set_last_error(RESIZE_ERROR, "Width must be positive");
+                return false;
+            }
+            break;
+        case ResizeOptions::FIT_HEIGHT:
+            if (opts.target_height <= 0) {
+                internal::set_last_error(RESIZE_ERROR, "Height must be positive");
+                return false;
+            }
+            break;
+        case ResizeOptions::EXACT_SIZE:
+            if (opts.target_width <= 0 || opts.target_height <= 0) {
+                internal::set_last_error(RESIZE_ERROR, "Width and height must be positive");
+                return false;
+            }
+            break;
+    }
+
+    if (opts.quality < 1 || opts.quality > 100) {
+        internal::set_last_error(RESIZE_ERROR, "Quality must be between 1 and 100");
+        return false;
+    }
+
+    return true;
+}
 
 ImageInfo get_image_info(const std::string& path) {
     ImageInfo info;
@@ -43,7 +112,6 @@ ImageInfo get_image_info(const std::string& path) {
     info.height = 0;
     info.channels = 0;
 
-    // Detect format
     internal::ImageFormat format = internal::detect_format(path);
     if (format == internal::FORMAT_UNKNOWN) {
         internal::set_last_error(UNSUPPORTED_FORMAT, "Unknown image format");
@@ -52,7 +120,6 @@ ImageInfo get_image_info(const std::string& path) {
 
     info.format = internal::format_to_string(format);
 
-    // Get dimensions
     if (!internal::get_image_dimensions(path, info.width, info.height, info.channels)) {
         internal::set_last_error(DECODE_ERROR, "Failed to read image dimensions");
         info.width = 0;
@@ -63,50 +130,43 @@ ImageInfo get_image_info(const std::string& path) {
     return info;
 }
 
-// ============================================
-// Single Image Resize
-// ============================================
-
 bool resize(
     const std::string& input_path,
     const std::string& output_path,
     const ResizeOptions& options
 ) {
-    // Detect input format
+    if (!validate_options(options)) {
+        return false;
+    }
+
     internal::ImageFormat input_format = internal::detect_format(input_path);
     if (input_format == internal::FORMAT_UNKNOWN) {
         internal::set_last_error(UNSUPPORTED_FORMAT, "Unknown input image format");
         return false;
     }
 
-    // Detect output format from extension or use input format
     internal::ImageFormat output_format = internal::detect_format(output_path);
     if (output_format == internal::FORMAT_UNKNOWN) {
-        // Try to determine from extension
         size_t dot_pos = output_path.find_last_of('.');
         if (dot_pos != std::string::npos) {
             std::string ext = output_path.substr(dot_pos + 1);
-            // Convert to lowercase
             for (char& c : ext) {
                 if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
             }
             output_format = internal::string_to_format(ext);
         }
 
-        // If still unknown, use input format
         if (output_format == internal::FORMAT_UNKNOWN) {
             output_format = input_format;
         }
     }
 
-    // Load image
     internal::ImageData input_data = internal::decode_image(input_path, input_format);
     if (!input_data.pixels) {
         internal::set_last_error(DECODE_ERROR, "Failed to decode input image");
         return false;
     }
 
-    // Calculate output dimensions
     int output_w, output_h;
     internal::calculate_dimensions(
         input_data.width, input_data.height,
@@ -114,7 +174,6 @@ bool resize(
         output_w, output_h
     );
 
-    // Resize image
     unsigned char* output_pixels = nullptr;
     bool resize_ok = internal::resize_image(
         input_data.pixels,
@@ -130,17 +189,14 @@ bool resize(
         return false;
     }
 
-    // Create output image data
     internal::ImageData output_data;
     output_data.pixels = output_pixels;
     output_data.width = output_w;
     output_data.height = output_h;
     output_data.channels = input_data.channels;
 
-    // Encode and save
     bool encode_ok = internal::encode_image(output_path, output_data, output_format, options.quality);
 
-    // Cleanup
     internal::free_image_data(input_data);
     delete[] output_pixels;
 
@@ -158,28 +214,28 @@ bool resize_with_format(
     const std::string& output_format_str,
     const ResizeOptions& options
 ) {
-    // Detect input format
+    if (!validate_options(options)) {
+        return false;
+    }
+
     internal::ImageFormat input_format = internal::detect_format(input_path);
     if (input_format == internal::FORMAT_UNKNOWN) {
         internal::set_last_error(UNSUPPORTED_FORMAT, "Unknown input image format");
         return false;
     }
 
-    // Parse output format
     internal::ImageFormat output_format = internal::string_to_format(output_format_str);
     if (output_format == internal::FORMAT_UNKNOWN) {
         internal::set_last_error(UNSUPPORTED_FORMAT, "Unknown output format: " + output_format_str);
         return false;
     }
 
-    // Load image
     internal::ImageData input_data = internal::decode_image(input_path, input_format);
     if (!input_data.pixels) {
         internal::set_last_error(DECODE_ERROR, "Failed to decode input image");
         return false;
     }
 
-    // Calculate output dimensions
     int output_w, output_h;
     internal::calculate_dimensions(
         input_data.width, input_data.height,
@@ -187,7 +243,6 @@ bool resize_with_format(
         output_w, output_h
     );
 
-    // Resize image
     unsigned char* output_pixels = nullptr;
     bool resize_ok = internal::resize_image(
         input_data.pixels,
@@ -203,17 +258,14 @@ bool resize_with_format(
         return false;
     }
 
-    // Create output image data
     internal::ImageData output_data;
     output_data.pixels = output_pixels;
     output_data.width = output_w;
     output_data.height = output_h;
     output_data.channels = input_data.channels;
 
-    // Encode and save
     bool encode_ok = internal::encode_image(output_path, output_data, output_format, options.quality);
 
-    // Cleanup
     internal::free_image_data(input_data);
     delete[] output_pixels;
 
@@ -225,27 +277,19 @@ bool resize_with_format(
     return true;
 }
 
-// ============================================
-// Batch Processing (Phase 4 - Parallel)
-// ============================================
-
 namespace {
-    // Phase A Optimization #7: Calculate optimal thread count based on batch size
     size_t calculate_optimal_threads(size_t batch_size, int requested_threads) {
-        // If user specified thread count, use it
         if (requested_threads > 0) {
             return static_cast<size_t>(requested_threads);
         }
 
-        // Auto-detect based on batch size
         if (batch_size < 5) {
-            return 1;  // Sequential for very small batches
+            return 1;
         } else if (batch_size < 20) {
-            return 2;  // 2 threads for small batches
+            return 2;
         } else if (batch_size < 50) {
-            return 4;  // 4 threads for medium batches
+            return 4;
         } else {
-            // For large batches, use 8 threads (optimal for most systems)
             return 8;
         }
     }
@@ -266,9 +310,7 @@ BatchResult batch_resize(
         return result;
     }
 
-    // Phase C: Use 3-stage pipeline if max_speed is enabled and batch is large enough
-    if (batch_opts.max_speed && input_paths.size() >= 50) {
-        // Convert to BatchItems and use pipeline
+    if (batch_opts.max_speed && input_paths.size() >= 20) {
         std::vector<BatchItem> items;
         items.reserve(input_paths.size());
 
@@ -276,7 +318,6 @@ BatchResult batch_resize(
             BatchItem item;
             item.input_path = input_path;
 
-            // Extract filename from input path
             size_t last_slash = input_path.find_last_of("/\\");
             std::string filename = (last_slash != std::string::npos)
                 ? input_path.substr(last_slash + 1)
@@ -290,32 +331,24 @@ BatchResult batch_resize(
         return batch_resize_custom(items, batch_opts);
     }
 
-    // Calculate optimal thread count (Phase A Optimization #7)
     size_t num_threads = calculate_optimal_threads(input_paths.size(), batch_opts.num_threads);
 
-    // Create thread pool and buffer pool
     internal::ThreadPool* pool = internal::create_thread_pool(num_threads);
     internal::BufferPool* buffer_pool = internal::create_buffer_pool();
 
-    // Thread-safe result tracking
     std::mutex result_mutex;
     std::atomic<bool> should_stop(false);
 
-    // Process each image
     for (const std::string& input_path : input_paths) {
-        // Check if we should stop
         if (should_stop.load()) {
             break;
         }
 
-        // Enqueue task
         internal::thread_pool_enqueue(pool, [&, input_path]() {
-            // Check stop flag
             if (should_stop.load()) {
                 return;
             }
 
-            // Extract filename from input path
             size_t last_slash = input_path.find_last_of("/\\");
             std::string filename = (last_slash != std::string::npos)
                 ? input_path.substr(last_slash + 1)
@@ -323,10 +356,8 @@ BatchResult batch_resize(
 
             std::string output_path = output_dir + "/" + filename;
 
-            // Perform resize
             bool success = resize(input_path, output_path, options);
 
-            // Update results (thread-safe)
             {
                 std::lock_guard<std::mutex> lock(result_mutex);
                 if (success) {
@@ -342,10 +373,8 @@ BatchResult batch_resize(
         });
     }
 
-    // Wait for all tasks to complete
     internal::thread_pool_wait(pool);
 
-    // Cleanup
     internal::destroy_buffer_pool(buffer_pool);
     internal::destroy_thread_pool(pool);
 
@@ -365,41 +394,31 @@ BatchResult batch_resize_custom(
         return result;
     }
 
-    // Phase C: Use 3-stage pipeline if max_speed is enabled and batch is large enough
-    if (batch_opts.max_speed && items.size() >= 50) {
+    if (batch_opts.max_speed && items.size() >= 20) {
         internal::PipelineProcessor pipeline(4, 8, 4, 32);
         return pipeline.process_batch(items);
     }
 
-    // Calculate optimal thread count (Phase A Optimization #7)
     size_t num_threads = calculate_optimal_threads(items.size(), batch_opts.num_threads);
 
-    // Create thread pool and buffer pool
     internal::ThreadPool* pool = internal::create_thread_pool(num_threads);
     internal::BufferPool* buffer_pool = internal::create_buffer_pool();
 
-    // Thread-safe result tracking
     std::mutex result_mutex;
     std::atomic<bool> should_stop(false);
 
-    // Process each item
     for (const BatchItem& item : items) {
-        // Check if we should stop
         if (should_stop.load()) {
             break;
         }
 
-        // Enqueue task
         internal::thread_pool_enqueue(pool, [&, item]() {
-            // Check stop flag
             if (should_stop.load()) {
                 return;
             }
 
-            // Perform resize with custom options
             bool success = resize(item.input_path, item.output_path, item.options);
 
-            // Update results (thread-safe)
             {
                 std::lock_guard<std::mutex> lock(result_mutex);
                 if (success) {
@@ -415,14 +434,12 @@ BatchResult batch_resize_custom(
         });
     }
 
-    // Wait for all tasks to complete
     internal::thread_pool_wait(pool);
 
-    // Cleanup
     internal::destroy_buffer_pool(buffer_pool);
     internal::destroy_thread_pool(pool);
 
     return result;
 }
 
-} // namespace fastresize
+}

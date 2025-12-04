@@ -1,3 +1,43 @@
+/*
+ * FastResize - The Fastest Image Resizing Library On The Planet
+ * Copyright (C) 2025 Tran Huu Canh (0xTh3OKrypt) and FastResize Contributors
+ *
+ * Resize 1,000 images in 2 seconds. Up to 2.9x faster than libvips,
+ * 3.1x faster than imageflow. Uses 3-4x less RAM than alternatives.
+ *
+ * Author: Tran Huu Canh (0xTh3OKrypt)
+ * Email: tranhuucanh39@gmail.com
+ * Homepage: https://github.com/tranhuucanh/fast_resize
+ *
+ * BSD 3-Clause License
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #pragma once
 
 #include "internal.h"
@@ -10,10 +50,6 @@
 namespace fastresize {
 namespace internal {
 
-// ============================================
-// Bounded Queue for Pipeline Stages
-// ============================================
-
 template<typename T>
 class BoundedQueue {
 public:
@@ -22,11 +58,9 @@ public:
         , done_(false)
     {}
 
-    // Push item to queue (blocks if full)
     bool push(T&& item) {
         std::unique_lock<std::mutex> lock(mutex_);
 
-        // Wait until queue has space or is done
         cv_not_full_.wait(lock, [this]() {
             return queue_.size() < capacity_ || done_;
         });
@@ -39,11 +73,9 @@ public:
         return true;
     }
 
-    // Pop item from queue (blocks if empty)
     bool pop(T& item) {
         std::unique_lock<std::mutex> lock(mutex_);
 
-        // Wait until queue has items or is done
         cv_not_empty_.wait(lock, [this]() {
             return !queue_.empty() || done_;
         });
@@ -57,7 +89,6 @@ public:
         return true;
     }
 
-    // Signal that no more items will be added
     void set_done() {
         std::unique_lock<std::mutex> lock(mutex_);
         done_ = true;
@@ -79,10 +110,6 @@ private:
     std::condition_variable cv_not_full_;
     bool done_;
 };
-
-// ============================================
-// Pipeline Task Structures
-// ============================================
 
 struct DecodeTask {
     std::string input_path;
@@ -112,10 +139,6 @@ struct ResizeResult {
     std::string error_message;
 };
 
-// ============================================
-// 3-Stage Pipeline Processor
-// ============================================
-
 class PipelineProcessor {
 public:
     PipelineProcessor(
@@ -126,31 +149,27 @@ public:
     );
 
     ~PipelineProcessor();
-
-    // Process batch using 3-stage pipeline
     BatchResult process_batch(const std::vector<BatchItem>& items);
 
 private:
-    // Thread pools for each stage
     ThreadPool* decode_pool_;
     ThreadPool* resize_pool_;
     ThreadPool* encode_pool_;
 
-    // Queues between stages
+    std::vector<BufferPool*> encode_buffer_pools_;
+
     BoundedQueue<DecodeResult> decode_queue_;
     BoundedQueue<ResizeResult> resize_queue_;
 
-    // Result tracking
     std::atomic<int> success_count_;
     std::atomic<int> failed_count_;
     std::mutex errors_mutex_;
     std::vector<std::string> errors_;
 
-    // Pipeline stages
     void decode_stage(const std::vector<BatchItem>& items);
     void resize_stage();
     void encode_stage();
 };
 
-} // namespace internal
-} // namespace fastresize
+}
+}
