@@ -58,7 +58,7 @@ def check_prebuilt_library
     end
   end
 
-  return false unless platform
+  return nil unless platform
 
   ext_dir = File.dirname(__FILE__)
   prebuilt_dir = File.expand_path("../../prebuilt/#{platform}", ext_dir)
@@ -66,36 +66,20 @@ def check_prebuilt_library
 
   if File.exist?(lib_path)
     puts "✅ Found pre-built library at #{lib_path}"
-    puts "⚡ Skipping compilation (using pre-built binary)"
-
-    File.open('Makefile', 'w') do |f|
-      f.puts "all:"
-      f.puts "\t@echo '✅ Using pre-built library for #{platform}'"
-      f.puts ""
-      f.puts "install:"
-      f.puts "\t@echo '✅ Using pre-built library for #{platform}'"
-      f.puts ""
-      f.puts "clean:"
-      f.puts "\t@echo 'Nothing to clean'"
-    end
-
-    return true
+    puts "⚡ Will compile Ruby binding with pre-built core library"
+    return prebuilt_dir
   end
 
   puts "⚠️  No pre-built library found for #{platform}"
-  puts "📦 Will compile from source..."
-  false
+  puts "📦 Will compile everything from source..."
+  nil
 end
 
-if check_prebuilt_library
-  puts "🎉 Installation complete (pre-built binary)!"
-  exit 0
-end
+prebuilt_dir = check_prebuilt_library
 
-puts "🔨 Compiling FastResize from source..."
+puts "🔨 Compiling FastResize Ruby binding..."
 
 $CXXFLAGS << " -std=c++14"
-
 $CXXFLAGS << " -O3"
 
 ext_dir = File.dirname(__FILE__)
@@ -107,46 +91,56 @@ unless File.directory?(include_dir)
   abort "❌ Include directory not found: #{include_dir}"
 end
 
-unless File.directory?(src_dir)
-  abort "❌ Source directory not found: #{src_dir}"
-end
-
-puts "📂 Building from source tree: #{project_root}"
-
 $INCFLAGS << " -I#{include_dir}"
 
 ['/opt/homebrew/include', '/usr/local/include'].each do |path|
   $INCFLAGS << " -I#{path}" if File.directory?(path)
 end
 
-puts "🔍 Searching for required libraries..."
+if prebuilt_dir
+  # Use pre-built core library
+  puts "📦 Using pre-built core library"
+  prebuilt_lib_dir = File.join(prebuilt_dir, 'lib')
+  $LDFLAGS << " -L#{prebuilt_lib_dir} -lfastresize"
 
-unless find_library('jpeg', 'jpeg_CreateDecompress', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-  abort "❌ ERROR: libjpeg not found. Please install: brew install jpeg (macOS) or apt-get install libjpeg-dev (Linux)"
-end
-
-unless find_library('png', 'png_create_read_struct', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-  abort "❌ ERROR: libpng not found. Please install: brew install libpng (macOS) or apt-get install libpng-dev (Linux)"
-end
-
-unless find_library('z', 'inflate', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-  abort "❌ ERROR: zlib not found. Please install: brew install zlib (macOS) or apt-get install zlib1g-dev (Linux)"
-end
-
-if find_library('webp', 'WebPDecode', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-  puts "✅ WebP support enabled"
-  find_library('webpdemux', 'WebPDemuxGetFrame', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-  find_library('sharpyuv', 'SharpYuvGetCPUInfo', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+  # Only compile the Ruby binding
+  $srcs = ['fastresize_ext.cpp']
 else
-  puts "⚠️  WebP support disabled (library not found)"
-end
+  # Compile everything from source
+  puts "🔨 Compiling from source..."
 
-$srcs = ['fastresize_ext.cpp'] + Dir.glob(File.join(src_dir, '*.cpp')).map { |f| File.basename(f) }
-$VPATH << src_dir
+  unless File.directory?(src_dir)
+    abort "❌ Source directory not found: #{src_dir}"
+  end
+
+  puts "🔍 Searching for required libraries..."
+
+  unless find_library('jpeg', 'jpeg_CreateDecompress', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    abort "❌ ERROR: libjpeg not found. Please install: brew install jpeg (macOS) or apt-get install libjpeg-dev (Linux)"
+  end
+
+  unless find_library('png', 'png_create_read_struct', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    abort "❌ ERROR: libpng not found. Please install: brew install libpng (macOS) or apt-get install libpng-dev (Linux)"
+  end
+
+  unless find_library('z', 'inflate', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    abort "❌ ERROR: zlib not found. Please install: brew install zlib (macOS) or apt-get install zlib1g-dev (Linux)"
+  end
+
+  if find_library('webp', 'WebPDecode', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    puts "✅ WebP support enabled"
+    find_library('webpdemux', 'WebPDemuxGetFrame', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    find_library('sharpyuv', 'SharpYuvGetCPUInfo', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+  else
+    puts "⚠️  WebP support disabled (library not found)"
+  end
+
+  $srcs = ['fastresize_ext.cpp'] + Dir.glob(File.join(src_dir, '*.cpp')).map { |f| File.basename(f) }
+  $VPATH << src_dir
+end
 
 puts "📝 Generating Makefile..."
 
 create_makefile('fastresize/fastresize_ext')
 
 puts "✅ Makefile generated successfully!"
-puts "💡 Run 'make' to compile the extension"
