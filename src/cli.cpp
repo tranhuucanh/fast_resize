@@ -44,6 +44,7 @@
 #include <vector>
 #include <cstring>
 #include <cstdlib>
+#include <climits>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <errno.h>
