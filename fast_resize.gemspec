@@ -51,7 +51,6 @@ Gem::Specification.new do |spec|
     'bug_tracker_uri'   => 'https://github.com/tranhuucanh/fast_resize/issues',
     'changelog_uri'     => 'https://github.com/tranhuucanh/fast_resize/blob/master/CHANGELOG.md',
     'documentation_uri' => 'https://github.com/tranhuucanh/fast_resize',
-    'source_code_uri'   => 'https://github.com/tranhuucanh/fast_resize',
-    'rubygems_mfa_required' => 'true'
+    'source_code_uri'   => 'https://github.com/tranhuucanh/fast_resize'
   }
 end
