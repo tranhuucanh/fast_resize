@@ -103,6 +103,31 @@ if prebuilt_dir
   prebuilt_lib_dir = File.join(prebuilt_dir, 'lib')
   $LDFLAGS << " -L#{prebuilt_lib_dir} -lfastresize"
 
+  # Link required image libraries that libfastresize.a depends on
+  puts "🔍 Linking required image libraries..."
+
+  # These libraries are required by the pre-built libfastresize.a
+  unless find_library('png', 'png_create_read_struct', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    abort "❌ ERROR: libpng not found. Please install: brew install libpng (macOS) or apt-get install libpng-dev (Linux)"
+  end
+
+  unless find_library('jpeg', 'jpeg_CreateDecompress', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    abort "❌ ERROR: libjpeg not found. Please install: brew install jpeg (macOS) or apt-get install libjpeg-dev (Linux)"
+  end
+
+  unless find_library('z', 'inflate', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    abort "❌ ERROR: zlib not found. Please install: brew install zlib (macOS) or apt-get install zlib1g-dev (Linux)"
+  end
+
+  # WebP is optional
+  if find_library('webp', 'WebPDecode', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    puts "✅ WebP support enabled"
+    find_library('webpdemux', 'WebPDemuxGetFrame', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+    find_library('sharpyuv', 'SharpYuvGetCPUInfo', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
+  else
+    puts "⚠️  WebP support disabled (library not found)"
+  end
+
   # Only compile the Ruby binding
   $srcs = ['fastresize_ext.cpp']
 else

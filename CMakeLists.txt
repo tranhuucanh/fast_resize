@@ -10,8 +10,11 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -flto")
-set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG -flto")
+# Disable LTO for static library builds to ensure compatibility across GCC versions
+# LTO bytecode format changes between GCC versions, causing link failures
+# when the static library is used with a different GCC version
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
 
 # Option for building shared vs static libraries
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
