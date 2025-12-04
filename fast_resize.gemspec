@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 lib = File.expand_path('../bindings/ruby/lib', __FILE__)
 $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
 
@@ -14,43 +16,39 @@ Gem::Specification.new do |spec|
 
   spec.required_ruby_version = ">= 2.5.0"
 
-  # Specify which files should be added to the gem
-  files = Dir[
-    'README.md',
-    'LICENSE',
-    'VERSION',
-    'CHANGELOG.md',
-    'bindings/ruby/lib/**/*',
-    'bindings/ruby/ext/**/*.{rb,cpp,h}',
-    'include/**/*.{h,hpp}',
-    'src/**/*.{cpp,c,h}',
-    'CMakeLists.txt'
-  ]
+  spec.metadata["homepage_uri"] = spec.homepage
+  spec.metadata["source_code_uri"] = spec.homepage
+  spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/master/CHANGELOG.md"
+  spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
 
-  # Include prebuilt binaries if they exist (for faster installation)
-  prebuilt_files = Dir.glob("bindings/ruby/prebuilt/**/*").select { |f| File.file?(f) }
-  if prebuilt_files.any?
-    puts "📦 Including #{prebuilt_files.length} pre-built binary files in gem"
-    files += prebuilt_files
-  else
-    puts "⚠️  No pre-built binaries found, gem will compile from source"
+  # Specify which files should be added to the gem
+  spec.files = Dir.chdir(File.expand_path(__dir__)) do
+    files = [
+      'README.md',
+      'LICENSE',
+      'VERSION',
+      'bindings/ruby/lib/**/*.rb',
+      'bindings/ruby/ext/fastresize/extconf.rb'
+    ].flat_map { |pattern| Dir.glob(pattern) }
+
+    # Include pre-built binaries if they exist (for faster installation)
+    # This is for CI builds where binaries are downloaded before gem build
+    prebuilt_files = Dir.glob("bindings/ruby/prebuilt/**/*").select { |f| File.file?(f) }
+    if prebuilt_files.any?
+      puts "📦 Including #{prebuilt_files.length} pre-built binary files in gem"
+      files += prebuilt_files
+    end
+
+    files
   end
 
-  spec.files         = files
+  spec.extensions    = ["bindings/ruby/ext/fastresize/extconf.rb"]
   spec.require_paths = ['bindings/ruby/lib']
-  spec.extensions    = ['bindings/ruby/ext/fastresize/extconf.rb']
 
-  # Development dependencies
+  # No runtime dependencies - uses pre-built CLI binary
+
   spec.add_development_dependency 'rake', '~> 13.0'
   spec.add_development_dependency 'rake-compiler', '~> 1.2'
   spec.add_development_dependency 'rspec', '~> 3.0'
   spec.add_development_dependency 'benchmark-ips', '~> 2.0'
-
-  # Metadata
-  spec.metadata = {
-    'bug_tracker_uri'   => 'https://github.com/tranhuucanh/fast_resize/issues',
-    'changelog_uri'     => 'https://github.com/tranhuucanh/fast_resize/blob/master/CHANGELOG.md',
-    'documentation_uri' => 'https://github.com/tranhuucanh/fast_resize',
-    'source_code_uri'   => 'https://github.com/tranhuucanh/fast_resize'
-  }
 end

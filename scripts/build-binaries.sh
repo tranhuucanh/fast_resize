@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # FastResize - Build Pre-compiled Binaries
-# This script builds binaries for multiple platforms
+# This script builds binaries for multiple platforms with full static linking
 
 set -e
 
@@ -9,8 +9,8 @@ echo "🔨 FastResize Binary Builder"
 echo "============================="
 echo ""
 
-# Get version from CMakeLists.txt
-VERSION=$(grep "project(fast_resize VERSION" CMakeLists.txt | sed 's/.*VERSION \([0-9.]*\).*/\1/')
+# Get version from VERSION file
+VERSION=$(cat VERSION)
 echo "Version: $VERSION"
 
 # Detect platform
@@ -22,22 +22,33 @@ elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
     OS="linux"
 fi
 
-echo "Platform: $OS-$ARCH"
+# Normalize architecture name
+if [[ "$ARCH" == "aarch64" ]]; then
+    ARCH_NORMALIZED="aarch64"
+elif [[ "$ARCH" == "arm64" ]]; then
+    ARCH_NORMALIZED="arm64"
+elif [[ "$ARCH" == "x86_64" ]]; then
+    ARCH_NORMALIZED="x86_64"
+else
+    ARCH_NORMALIZED="$ARCH"
+fi
+
+echo "Platform: $OS-$ARCH_NORMALIZED"
 echo ""
 
-# Output directory
-OUTPUT_DIR="bindings/ruby/prebuilt/$OS-$ARCH"
+# Output directory - consistent with gem structure
+OUTPUT_DIR="bindings/ruby/prebuilt/$OS-$ARCH_NORMALIZED"
 mkdir -p "$OUTPUT_DIR/lib"
 mkdir -p "$OUTPUT_DIR/bin"
 
-echo "🔧 Building for $OS-$ARCH..."
+echo "🔧 Building for $OS-$ARCH_NORMALIZED..."
 
 # Clean and build
 rm -rf build
 mkdir build
 cd build
 
-echo "🔧 Building static library..."
+echo "🔧 Building static library and CLI..."
 
 # Set PKG_CONFIG_PATH to find custom-built libraries
 if [[ "$OS" == "linux" ]]; then
@@ -69,17 +80,21 @@ cd ..
 if [[ "$OS" == "linux" ]]; then
     echo "🔧 Packaging static library and CLI for Linux..."
 
-    # Debug: Check the library
-    echo "🔍 Checking library file:"
-    file build/libfastresize.a
-    ls -la build/libfastresize.a
+    # Debug: Check the binary
+    echo "🔍 Checking binary file:"
+    file build/fast_resize
+    ls -la build/fast_resize
 
-    # Get library size
-    if [[ "$ARCH" == "aarch64" ]]; then
-        echo "Library size: $(stat -c%s build/libfastresize.a 2>/dev/null || stat -f%z build/libfastresize.a) bytes"
-    else
-        echo "Library size: $(stat -c%s build/libfastresize.a) bytes"
-    fi
+    # Get binary size
+    echo "Binary size: $(stat -c%s build/fast_resize 2>/dev/null || stat -f%z build/fast_resize) bytes"
+
+    # Check binary dependencies
+    echo "📋 Binary dependencies:"
+    ldd build/fast_resize 2>&1 || echo "✅ Binary is statically linked (ldd failed - this is GOOD!)"
+
+    # Test if binary runs
+    echo "🧪 Testing binary execution:"
+    ./build/fast_resize --version || echo "⚠️ Binary test failed"
 
     # Copy the static library
     cp build/libfastresize.a "$OUTPUT_DIR/lib/libfastresize.a"
@@ -87,10 +102,11 @@ if [[ "$OS" == "linux" ]]; then
     # Copy CLI binary
     if [ -f build/fast_resize ]; then
         cp build/fast_resize "$OUTPUT_DIR/bin/fast_resize"
-        echo "✅ Built CLI binary for Linux $ARCH"
+        chmod +x "$OUTPUT_DIR/bin/fast_resize"
+        echo "✅ Built CLI binary for Linux $ARCH_NORMALIZED"
     fi
 
-    echo "✅ Built static library for Linux $ARCH"
+    echo "✅ Built static library for Linux $ARCH_NORMALIZED"
 else
     # macOS: Copy static library and CLI binary
     cp build/libfastresize.a "$OUTPUT_DIR/lib/libfastresize.a"
@@ -98,38 +114,26 @@ else
     # Copy CLI binary
     if [ -f build/fast_resize ]; then
         cp build/fast_resize "$OUTPUT_DIR/bin/fast_resize"
-        echo "✅ Built CLI binary for macOS"
+        chmod +x "$OUTPUT_DIR/bin/fast_resize"
+        echo "✅ Built CLI binary for macOS $ARCH_NORMALIZED"
     fi
 
-    echo "✅ Built static library for macOS"
+    echo "✅ Built static library for macOS $ARCH_NORMALIZED"
 fi
 
 # Copy headers
 cp -r include "$OUTPUT_DIR/"
 
-# Create tarball in prebuilt/ folder (not bindings/ruby/prebuilt/)
+# Create tarball in prebuilt/ folder (for GitHub release)
 mkdir -p prebuilt
 cd bindings/ruby/prebuilt
-tar czf "../../../prebuilt/fast_resize-$VERSION-$OS-$ARCH.tar.gz" "$OS-$ARCH"
+tar czf "../../../prebuilt/fast_resize-$VERSION-$OS-$ARCH_NORMALIZED.tar.gz" "$OS-$ARCH_NORMALIZED"
 cd ../../..
-
-# Create CLI-only tarball for standalone installation
-if [ -f "$OUTPUT_DIR/bin/fast_resize" ]; then
-    echo ""
-    echo "📦 Creating standalone CLI tarball..."
-    mkdir -p prebuilt/cli-temp
-    cp "$OUTPUT_DIR/bin/fast_resize" prebuilt/cli-temp/
-    cd prebuilt/cli-temp
-    tar czf "../fast_resize-$VERSION-$OS-$ARCH-cli.tar.gz" fast_resize
-    cd ../..
-    rm -rf prebuilt/cli-temp
-    echo "✅ CLI tarball: prebuilt/fast_resize-$VERSION-$OS-$ARCH-cli.tar.gz"
-fi
 
 echo ""
 echo "✅ Binary built successfully!"
-echo "📦 Output: prebuilt/fast_resize-$VERSION-$OS-$ARCH.tar.gz"
-echo "📦 Ruby prebuilt: bindings/ruby/prebuilt/$OS-$ARCH/"
+echo "📦 Output: prebuilt/fast_resize-$VERSION-$OS-$ARCH_NORMALIZED.tar.gz"
+echo "📦 Ruby prebuilt: bindings/ruby/prebuilt/$OS-$ARCH_NORMALIZED/"
 echo ""
 echo "Contents:"
 ls -lh "$OUTPUT_DIR/lib/" 2>/dev/null || true

@@ -39,133 +39,107 @@
 require 'mkmf'
 require 'rbconfig'
 
-def check_prebuilt_library
-  puts "🔍 Checking for pre-built library..."
-
+# Check if pre-built binary exists
+def check_prebuilt_binary
   os = RbConfig::CONFIG['host_os']
   arch = RbConfig::CONFIG['host_cpu']
 
   platform = case os
   when /darwin/
     case arch
-    when /arm64|aarch64/ then 'macos-arm64'
-    when /x86_64|x64/ then 'macos-x86_64'
+    when /arm64|aarch64/
+      'macos-arm64'
+    when /x86_64|x64/
+      'macos-x86_64'
+    else
+      nil
     end
   when /linux/
     case arch
-    when /x86_64|x64/ then 'linux-x86_64'
-    when /arm64|aarch64/ then 'linux-aarch64'
+    when /x86_64|x64/
+      'linux-x86_64'
+    when /arm64|aarch64/
+      'linux-aarch64'
+    else
+      nil
+    end
+  else
+    nil
+  end
+
+  return false unless platform
+
+  # When installed as gem, binaries are in bindings/ruby/prebuilt/
+  ext_dir = File.dirname(__FILE__)
+  prebuilt_dir = File.expand_path("../../prebuilt/#{platform}", ext_dir)
+  binary_path = File.join(prebuilt_dir, 'bin', 'fast_resize')
+
+  if File.exist?(binary_path)
+    puts "✅ Found pre-built binary at #{binary_path}"
+    puts "⏭️  Skipping compilation"
+
+    # Create a dummy Makefile that does nothing
+    File.open('Makefile', 'w') do |f|
+      f.puts "all:\n\t@echo 'Using pre-built binary'\n"
+      f.puts "install:\n\t@echo 'Using pre-built binary'\n"
+      f.puts "clean:\n\t@echo 'Nothing to clean'\n"
+    end
+
+    return true
+  end
+
+  # Check for tarball
+  tarball_path = File.join(File.expand_path("../../prebuilt", ext_dir), "#{platform}.tar.gz")
+  if File.exist?(tarball_path)
+    puts "📦 Found tarball at #{tarball_path}"
+    puts "📦 Extracting pre-built binary..."
+
+    require 'fileutils'
+    FileUtils.mkdir_p(prebuilt_dir)
+    system("tar -xzf '#{tarball_path}' -C '#{File.dirname(prebuilt_dir)}'")
+
+    if File.exist?(binary_path)
+      File.chmod(0755, binary_path)
+      puts "✅ Extracted pre-built binary to #{binary_path}"
+      puts "⏭️  Skipping compilation"
+
+      # Create a dummy Makefile that does nothing
+      File.open('Makefile', 'w') do |f|
+        f.puts "all:\n\t@echo 'Using pre-built binary'\n"
+        f.puts "install:\n\t@echo 'Using pre-built binary'\n"
+        f.puts "clean:\n\t@echo 'Nothing to clean'\n"
+      end
+
+      return true
     end
   end
 
-  return nil unless platform
-
-  ext_dir = File.dirname(__FILE__)
-  prebuilt_dir = File.expand_path("../../prebuilt/#{platform}", ext_dir)
-  lib_path = File.join(prebuilt_dir, 'lib', 'libfastresize.a')
-
-  if File.exist?(lib_path)
-    puts "✅ Found pre-built library at #{lib_path}"
-    puts "⚡ Will compile Ruby binding with pre-built core library"
-    return prebuilt_dir
-  end
-
-  puts "⚠️  No pre-built library found for #{platform}"
-  puts "📦 Will compile everything from source..."
-  nil
+  false
 end
 
-prebuilt_dir = check_prebuilt_library
+# Try to use pre-built binary first
+exit 0 if check_prebuilt_binary
 
-puts "🔨 Compiling FastResize Ruby binding..."
+# If no pre-built binary, show error message
+# We don't support compiling from source in this version
+puts "❌ No pre-built binary found for this platform"
+puts ""
+puts "FastResize requires a pre-built binary. Please check:"
+puts "  1. Your platform is supported (macOS/Linux, x86_64/ARM64)"
+puts "  2. The gem was properly downloaded with all files"
+puts "  3. Report this issue at: https://github.com/tranhuucanh/fast_resize/issues"
+puts ""
 
-$CXXFLAGS << " -std=c++14"
-$CXXFLAGS << " -O3"
-
-ext_dir = File.dirname(__FILE__)
-project_root = File.expand_path('../../../../', ext_dir)
-include_dir = File.join(project_root, 'include')
-src_dir = File.join(project_root, 'src')
-
-unless File.directory?(include_dir)
-  abort "❌ Include directory not found: #{include_dir}"
+# Create a Makefile that will fail gracefully
+File.open('Makefile', 'w') do |f|
+  f.puts "all:"
+  f.puts "\t@echo 'ERROR: No pre-built binary available for this platform'"
+  f.puts "\t@exit 1"
+  f.puts "install:"
+  f.puts "\t@echo 'ERROR: No pre-built binary available for this platform'"
+  f.puts "\t@exit 1"
+  f.puts "clean:"
+  f.puts "\t@echo 'Nothing to clean'"
 end
 
-$INCFLAGS << " -I#{include_dir}"
-
-['/opt/homebrew/include', '/usr/local/include'].each do |path|
-  $INCFLAGS << " -I#{path}" if File.directory?(path)
-end
-
-if prebuilt_dir
-  # Use pre-built core library
-  puts "📦 Using pre-built core library"
-  prebuilt_lib_dir = File.join(prebuilt_dir, 'lib')
-  $LDFLAGS << " -L#{prebuilt_lib_dir} -lfastresize"
-
-  # Link required image libraries that libfastresize.a depends on
-  puts "🔍 Linking required image libraries..."
-
-  # These libraries are required by the pre-built libfastresize.a
-  unless find_library('png', 'png_create_read_struct', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    abort "❌ ERROR: libpng not found. Please install: brew install libpng (macOS) or apt-get install libpng-dev (Linux)"
-  end
-
-  unless find_library('jpeg', 'jpeg_CreateDecompress', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    abort "❌ ERROR: libjpeg not found. Please install: brew install jpeg (macOS) or apt-get install libjpeg-dev (Linux)"
-  end
-
-  unless find_library('z', 'inflate', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    abort "❌ ERROR: zlib not found. Please install: brew install zlib (macOS) or apt-get install zlib1g-dev (Linux)"
-  end
-
-  # WebP is optional
-  if find_library('webp', 'WebPDecode', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    puts "✅ WebP support enabled"
-    find_library('webpdemux', 'WebPDemuxGetFrame', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    find_library('sharpyuv', 'SharpYuvGetCPUInfo', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-  else
-    puts "⚠️  WebP support disabled (library not found)"
-  end
-
-  # Only compile the Ruby binding
-  $srcs = ['fastresize_ext.cpp']
-else
-  # Compile everything from source
-  puts "🔨 Compiling from source..."
-
-  unless File.directory?(src_dir)
-    abort "❌ Source directory not found: #{src_dir}"
-  end
-
-  puts "🔍 Searching for required libraries..."
-
-  unless find_library('jpeg', 'jpeg_CreateDecompress', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    abort "❌ ERROR: libjpeg not found. Please install: brew install jpeg (macOS) or apt-get install libjpeg-dev (Linux)"
-  end
-
-  unless find_library('png', 'png_create_read_struct', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    abort "❌ ERROR: libpng not found. Please install: brew install libpng (macOS) or apt-get install libpng-dev (Linux)"
-  end
-
-  unless find_library('z', 'inflate', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    abort "❌ ERROR: zlib not found. Please install: brew install zlib (macOS) or apt-get install zlib1g-dev (Linux)"
-  end
-
-  if find_library('webp', 'WebPDecode', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    puts "✅ WebP support enabled"
-    find_library('webpdemux', 'WebPDemuxGetFrame', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-    find_library('sharpyuv', 'SharpYuvGetCPUInfo', '/opt/homebrew/lib', '/usr/local/lib', '/usr/lib')
-  else
-    puts "⚠️  WebP support disabled (library not found)"
-  end
-
-  $srcs = ['fastresize_ext.cpp'] + Dir.glob(File.join(src_dir, '*.cpp')).map { |f| File.basename(f) }
-  $VPATH << src_dir
-end
-
-puts "📝 Generating Makefile..."
-
-create_makefile('fastresize/fastresize_ext')
-
-puts "✅ Makefile generated successfully!"
+exit 1

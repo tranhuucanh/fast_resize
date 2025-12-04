@@ -23,7 +23,7 @@ Complete Ruby integration guide for FastResize.
 ### Bundler (Gemfile)
 
 ```ruby
-gem 'fastresize'
+gem 'fast_resize'
 ```
 
 Then run:
@@ -34,7 +34,7 @@ bundle install
 ### Direct Install
 
 ```bash
-gem install fastresize
+gem install fast_resize
 ```
 
 ### Requirements
