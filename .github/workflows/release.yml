@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
-          brew install cmake pkg-config jpeg libpng webp
+          brew install cmake pkg-config zlib jpeg libpng webp
 
           echo "=== Verifying installations ==="
           which cmake
@@ -98,7 +98,7 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
-          brew install cmake pkg-config jpeg libpng webp
+          brew install cmake pkg-config zlib jpeg libpng webp
 
           echo "=== Verifying installations ==="
           which cmake

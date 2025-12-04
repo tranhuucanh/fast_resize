@@ -17,7 +17,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install cmake pkg-config jpeg libpng webp
+          brew install cmake pkg-config zlib jpeg libpng webp
 
       - name: Build
         run: |
@@ -63,7 +63,7 @@ jobs:
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install cmake pkg-config jpeg libpng webp
+          brew install cmake pkg-config zlib jpeg libpng webp
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'

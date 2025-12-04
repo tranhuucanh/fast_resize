@@ -135,6 +135,7 @@ if(FASTRESIZE_STATIC OR NOT BUILD_SHARED_LIBS)
         NAMES libz.a
         PATHS
             /usr/local/lib
+            /usr/local/opt/zlib/lib
             /opt/homebrew/lib
             /opt/homebrew/opt/zlib/lib
             /usr/lib
@@ -150,17 +151,35 @@ if(FASTRESIZE_STATIC OR NOT BUILD_SHARED_LIBS)
     message(STATUS "  SHARPYUV: ${SHARPYUV_STATIC_LIBRARY}")
     message(STATUS "  ZLIB:     ${ZLIB_STATIC_LIBRARY}")
 
-    target_link_libraries(fastresize PRIVATE
-        Threads::Threads
-        ${JPEG_STATIC_LIBRARY}
-        ${PNG_STATIC_LIBRARY}
-        ${ZLIB_STATIC_LIBRARY}
-    )
+    # Link with required static libraries (check if they exist first)
+    if(JPEG_STATIC_LIBRARY AND PNG_STATIC_LIBRARY AND ZLIB_STATIC_LIBRARY)
+        target_link_libraries(fastresize PRIVATE
+            Threads::Threads
+            ${JPEG_STATIC_LIBRARY}
+            ${PNG_STATIC_LIBRARY}
+            ${ZLIB_STATIC_LIBRARY}
+        )
 
-    if(WEBP_STATIC_LIBRARY)
-        target_link_libraries(fastresize PRIVATE ${WEBP_STATIC_LIBRARY})
-        if(SHARPYUV_STATIC_LIBRARY)
-            target_link_libraries(fastresize PRIVATE ${SHARPYUV_STATIC_LIBRARY})
+        if(WEBP_STATIC_LIBRARY)
+            target_link_libraries(fastresize PRIVATE ${WEBP_STATIC_LIBRARY})
+            if(SHARPYUV_STATIC_LIBRARY)
+                target_link_libraries(fastresize PRIVATE ${SHARPYUV_STATIC_LIBRARY})
+            endif()
+        endif()
+    else()
+        message(WARNING "⚠️  Some static libraries not found, falling back to dynamic linking")
+        message(WARNING "  JPEG: ${JPEG_STATIC_LIBRARY}")
+        message(WARNING "  PNG: ${PNG_STATIC_LIBRARY}")
+        message(WARNING "  ZLIB: ${ZLIB_STATIC_LIBRARY}")
+
+        target_link_libraries(fastresize PRIVATE
+            Threads::Threads
+            ${JPEG_LIBRARIES}
+            ${PNG_LIBRARIES}
+        )
+
+        if(WEBP_FOUND)
+            target_link_libraries(fastresize PRIVATE ${WEBP_LIBRARIES})
         endif()
     endif()
 
