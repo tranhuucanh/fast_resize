@@ -62,7 +62,7 @@ Resize 1,000 images in **2 seconds**. Up to **2.9x faster** than libvips, **3.1x
 <div align="center">
 
 💡 **Want to dive deeper?** Explore full details about FastResize →
-<a href="https://deepwiki.com/tranhuucanh/fast_resize"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" style="display:inline; vertical-align: middle;" /></a>
+<a target="_blank" href="https://deepwiki.com/tranhuucanh/fast_resize"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" style="display:inline; vertical-align: middle;" /></a>
 
 </div>
 
