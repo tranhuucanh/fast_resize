@@ -365,7 +365,6 @@ FastResize is built on industry-standard, high-performance libraries:
 - 🚀 **Zero-copy Pipeline** - Minimal memory allocation
 - 💪 **Multi-threaded** - Parallel batch processing
 - 🔥 **Memory-mapped I/O** - Efficient file reading
-- 🎯 **libjpeg-turbo** - 2-6x faster JPEG than standard libjpeg
 
 ---
 
