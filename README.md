@@ -8,7 +8,6 @@ Resize 1,000 images in **2 seconds**. Up to **2.9x faster** than libvips, **3.1x
 
 [![GitHub Stars](https://img.shields.io/github/stars/tranhuucanh/fast_resize?style=social)](https://github.com/tranhuucanh/fast_resize/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/tranhuucanh/fast_resize?style=social)](https://github.com/tranhuucanh/fast_resize/network/members)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tranhuucanh/fast_resize)
 
 [Installation](#-installation) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Benchmarks](#-performance-benchmarks)
 
@@ -16,10 +15,12 @@ Resize 1,000 images in **2 seconds**. Up to **2.9x faster** than libvips, **3.1x
 
 ### 🛠️ Tech Stack & Stats
 
-[![License](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
 [![C++](https://img.shields.io/badge/C++-14-blue.svg)](https://isocpp.org/)
+[![C](https://img.shields.io/badge/C-99-blue.svg)](https://en.wikipedia.org/wiki/C99)
+[![Ruby](https://img.shields.io/badge/Ruby-2.5+-red.svg)](https://www.ruby-lang.org/)
 [![CMake](https://img.shields.io/badge/CMake-3.15+-064F8C.svg)](https://cmake.org/)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25.svg)](https://www.gnu.org/software/bash/)
+[![License](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
 
 💎 **Ruby:** [![Gem](https://img.shields.io/badge/Gem-fast_resize-red.svg)](https://rubygems.org/gems/fast_resize) [![Gem Downloads](https://badgen.net/rubygems/dt/fast_resize)](https://rubygems.org/gems/fast_resize)
 
@@ -57,6 +58,13 @@ Resize 1,000 images in **2 seconds**. Up to **2.9x faster** than libvips, **3.1x
 |---------|-------------|---------------------|
 | **[libvips](https://www.libvips.org/)** | The gold standard for high-performance image processing. Used by Sharp (Node.js), Shopify, and Wikipedia. Widely recognized as one of the fastest image processing libraries available. | FastResize is **1.7x - 2.9x faster** |
 | **[imageflow](https://www.imageflow.io/)** | A Rust-based image manipulation engine designed for high throughput and accuracy. Known for powering modern large-scale image resizing pipelines. | FastResize is **1.1x - 3.1x faster** |
+
+<div align="center">
+
+💡 **Want to dive deeper?** Explore full details about FastResize →
+<a href="https://deepwiki.com/tranhuucanh/fast_resize"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" style="display:inline; vertical-align: middle;" /></a>
+
+</div>
 
 ---
 
