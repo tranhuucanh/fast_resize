@@ -57,57 +57,6 @@
 namespace fastresize {
 namespace internal {
 
-static void resize_bilinear_scalar(
-    const uint8_t* src, int src_w, int src_h, int channels,
-    uint8_t* dst, int dst_w, int dst_h
-) {
-    const int FRAC_BITS = 16;
-    const int FRAC_ONE = 1 << FRAC_BITS;
-
-    int x_ratio = ((src_w - 1) << FRAC_BITS) / dst_w;
-    int y_ratio = ((src_h - 1) << FRAC_BITS) / dst_h;
-
-    int src_stride = src_w * channels;
-    int dst_stride = dst_w * channels;
-
-    for (int y = 0; y < dst_h; y++) {
-        int src_y_fp = y * y_ratio;
-        int y1 = src_y_fp >> FRAC_BITS;
-        int y2 = std::min(y1 + 1, src_h - 1);
-        int y_frac = src_y_fp & (FRAC_ONE - 1);
-        int y_frac_inv = FRAC_ONE - y_frac;
-
-        const uint8_t* row1 = src + y1 * src_stride;
-        const uint8_t* row2 = src + y2 * src_stride;
-        uint8_t* out_row = dst + y * dst_stride;
-
-        for (int x = 0; x < dst_w; x++) {
-            int src_x_fp = x * x_ratio;
-            int x1 = src_x_fp >> FRAC_BITS;
-            int x2 = std::min(x1 + 1, src_w - 1);
-            int x_frac = src_x_fp & (FRAC_ONE - 1);
-            int x_frac_inv = FRAC_ONE - x_frac;
-
-            const uint8_t* p1 = row1 + x1 * channels;
-            const uint8_t* p2 = row1 + x2 * channels;
-            const uint8_t* p3 = row2 + x1 * channels;
-            const uint8_t* p4 = row2 + x2 * channels;
-
-            int w1 = (x_frac_inv * y_frac_inv) >> FRAC_BITS;
-            int w2 = (x_frac * y_frac_inv) >> FRAC_BITS;
-            int w3 = (x_frac_inv * y_frac) >> FRAC_BITS;
-            int w4 = (x_frac * y_frac) >> FRAC_BITS;
-
-            uint8_t* out = out_row + x * channels;
-
-            for (int c = 0; c < channels; c++) {
-                int val = (p1[c] * w1 + p2[c] * w2 + p3[c] * w3 + p4[c] * w4) >> FRAC_BITS;
-                out[c] = (uint8_t)std::min(val, 255);
-            }
-        }
-    }
-}
-
 #ifdef USE_NEON
 
 static void resize_bilinear_neon_rgba(
@@ -376,8 +325,7 @@ bool simd_resize(
     }
 #endif
 
-    resize_bilinear_scalar(src, src_w, src_h, channels, dst, dst_w, dst_h);
-    return true;
+    return false;
 }
 
 }
