@@ -55,7 +55,7 @@ module FastResize
           when /arm64|aarch64/
             'macos-arm64'
           when /x86_64|x64/
-            'macos-x86_64'
+            raise "macOS x86_64 is no longer supported. Please use Apple Silicon (M1/M2/M3) or compile from source."
           else
             raise "Unsupported macOS architecture: #{arch}"
           end

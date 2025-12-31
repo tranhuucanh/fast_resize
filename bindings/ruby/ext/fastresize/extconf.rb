@@ -50,7 +50,7 @@ def check_prebuilt_binary
     when /arm64|aarch64/
       'macos-arm64'
     when /x86_64|x64/
-      'macos-x86_64'
+      nil  # macOS x86_64 no longer supported
     else
       nil
     end

@@ -78,56 +78,6 @@ jobs:
           name: macos-arm64
           path: prebuilt/*.tar.gz
 
-  build-macos-x86_64:
-    runs-on: macos-13  # Intel runner
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Get version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-          else
-            VERSION=${GITHUB_REF#refs/tags/v}
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-          fi
-          echo "📦 Building version: $VERSION"
-
-      - name: Install dependencies
-        run: |
-          set -e
-          brew install cmake pkg-config zlib jpeg libpng webp
-
-          echo "=== Verifying installations ==="
-          which cmake
-          which pkg-config
-
-          echo "=== libpng version ==="
-          PKG_PNG_VER=$(pkg-config --modversion libpng)
-          echo "libpng version: $PKG_PNG_VER"
-
-          if [[ "$PKG_PNG_VER" < "1.6" ]]; then
-            echo "❌ ERROR: libpng version too old: $PKG_PNG_VER"
-            exit 1
-          fi
-
-          echo "✅ All dependencies verified"
-
-      - name: Build binary
-        run: |
-          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
-          export CMAKE_PREFIX_PATH="/usr/local:$CMAKE_PREFIX_PATH"
-
-          chmod +x scripts/build-binaries.sh
-          ./scripts/build-binaries.sh || { echo "Build failed"; exit 1; }
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-x86_64
-          path: prebuilt/*.tar.gz
 
   build-linux-x86_64:
     runs-on: ubuntu-latest
@@ -319,7 +269,7 @@ jobs:
   # ============================================================================
 
   create-release:
-    needs: [build-macos-arm64, build-macos-x86_64, build-linux-x86_64, build-linux-arm64]
+    needs: [build-macos-arm64, build-linux-x86_64, build-linux-arm64]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -375,7 +325,7 @@ jobs:
   # ============================================================================
 
   update-homebrew:
-    needs: [build-macos-arm64, build-macos-x86_64, create-release]
+    needs: [build-macos-arm64, create-release]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout fast_resize repo
@@ -494,10 +444,6 @@ jobs:
           curl -L -o bindings/ruby/prebuilt/macos-arm64.tar.gz \
             "https://github.com/tranhuucanh/fast_resize/releases/download/v${VERSION}/fast_resize-${VERSION}-macos-arm64.tar.gz"
 
-          echo "📥 Downloading macOS x86_64 binary..."
-          curl -L -o bindings/ruby/prebuilt/macos-x86_64.tar.gz \
-            "https://github.com/tranhuucanh/fast_resize/releases/download/v${VERSION}/fast_resize-${VERSION}-macos-x86_64.tar.gz"
-
           echo "📥 Downloading Linux x86_64 binary..."
           curl -L -o bindings/ruby/prebuilt/linux-x86_64.tar.gz \
             "https://github.com/tranhuucanh/fast_resize/releases/download/v${VERSION}/fast_resize-${VERSION}-linux-x86_64.tar.gz"
@@ -509,7 +455,6 @@ jobs:
           cd bindings/ruby/prebuilt
           echo "📦 Extracting binaries..."
           tar -xzf macos-arm64.tar.gz
-          tar -xzf macos-x86_64.tar.gz
           tar -xzf linux-x86_64.tar.gz
           tar -xzf linux-aarch64.tar.gz
 
@@ -560,7 +505,7 @@ jobs:
           echo "=============================================="
           echo ""
           echo "✅ Binaries built for:"
-          echo "   - macOS (ARM64 + x86_64)"
+          echo "   - macOS (ARM64 only)"
           echo "   - Linux (x86_64 + ARM64)"
           echo ""
           echo "✅ Published to:"

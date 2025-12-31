@@ -11,7 +11,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-14, macos-13]  # ARM and Intel
+        os: [macos-14]  # ARM only (macos-13 Intel retired)
     steps:
       - uses: actions/checkout@v3
 
