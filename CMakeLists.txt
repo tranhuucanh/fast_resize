@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(fast_resize VERSION 1.0.3 LANGUAGES CXX C)
+project(fast_resize VERSION 1.0.4 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
