@@ -95,7 +95,15 @@ void PipelineProcessor::decode_stage(const std::vector<BatchItem>& items) {
                 return;
             }
 
-            result.image = decode_image(item.input_path, fmt);
+            int input_w, input_h, input_c;
+            if (get_image_dimensions(item.input_path, input_w, input_h, input_c)) {
+                int target_w, target_h;
+                calculate_dimensions(input_w, input_h, item.options, target_w, target_h);
+                result.image = decode_image(item.input_path, fmt, target_w, target_h);
+            } else {
+                result.image = decode_image(item.input_path, fmt);
+            }
+
             if (result.image.pixels == nullptr) {
                 result.error_message = "Decode failed: " + item.input_path;
                 decode_queue_.push(std::move(result));
@@ -112,9 +120,8 @@ void PipelineProcessor::decode_stage(const std::vector<BatchItem>& items) {
 }
 
 void PipelineProcessor::resize_stage() {
-    std::vector<std::thread> workers;
     for (size_t i = 0; i < 8; ++i) {
-        workers.emplace_back([this]() {
+        thread_pool_enqueue(resize_pool_, [this]() {
             DecodeResult decode_result;
 
             while (decode_queue_.pop(decode_result)) {
@@ -175,17 +182,13 @@ void PipelineProcessor::resize_stage() {
         });
     }
 
-    for (auto& worker : workers) {
-        worker.join();
-    }
-
+    thread_pool_wait(resize_pool_);
     resize_queue_.set_done();
 }
 
 void PipelineProcessor::encode_stage() {
-    std::vector<std::thread> workers;
     for (size_t i = 0; i < encode_buffer_pools_.size(); ++i) {
-        workers.emplace_back([this, i]() {
+        thread_pool_enqueue(encode_pool_, [this, i]() {
             BufferPool* buffer_pool = encode_buffer_pools_[i];
             ResizeResult resize_result;
 
@@ -253,9 +256,7 @@ void PipelineProcessor::encode_stage() {
         });
     }
 
-    for (auto& worker : workers) {
-        worker.join();
-    }
+    thread_pool_wait(encode_pool_);
 }
 
 BatchResult PipelineProcessor::process_batch(const std::vector<BatchItem>& items) {

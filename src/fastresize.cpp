@@ -161,18 +161,24 @@ bool resize(
         }
     }
 
-    internal::ImageData input_data = internal::decode_image(input_path, input_format);
-    if (!input_data.pixels) {
-        internal::set_last_error(DECODE_ERROR, "Failed to decode input image");
+    int input_w, input_h, input_channels;
+    if (!internal::get_image_dimensions(input_path, input_w, input_h, input_channels)) {
+        internal::set_last_error(DECODE_ERROR, "Failed to read image dimensions");
         return false;
     }
 
     int output_w, output_h;
     internal::calculate_dimensions(
-        input_data.width, input_data.height,
+        input_w, input_h,
         options,
         output_w, output_h
     );
+
+    internal::ImageData input_data = internal::decode_image(input_path, input_format, output_w, output_h);
+    if (!input_data.pixels) {
+        internal::set_last_error(DECODE_ERROR, "Failed to decode input image");
+        return false;
+    }
 
     unsigned char* output_pixels = nullptr;
     bool resize_ok = internal::resize_image(
@@ -230,18 +236,24 @@ bool resize_with_format(
         return false;
     }
 
-    internal::ImageData input_data = internal::decode_image(input_path, input_format);
-    if (!input_data.pixels) {
-        internal::set_last_error(DECODE_ERROR, "Failed to decode input image");
+    int input_w, input_h, input_channels;
+    if (!internal::get_image_dimensions(input_path, input_w, input_h, input_channels)) {
+        internal::set_last_error(DECODE_ERROR, "Failed to read image dimensions");
         return false;
     }
 
     int output_w, output_h;
     internal::calculate_dimensions(
-        input_data.width, input_data.height,
+        input_w, input_h,
         options,
         output_w, output_h
     );
+
+    internal::ImageData input_data = internal::decode_image(input_path, input_format, output_w, output_h);
+    if (!input_data.pixels) {
+        internal::set_last_error(DECODE_ERROR, "Failed to decode input image");
+        return false;
+    }
 
     unsigned char* output_pixels = nullptr;
     bool resize_ok = internal::resize_image(
@@ -395,7 +407,24 @@ BatchResult batch_resize_custom(
     }
 
     if (batch_opts.max_speed && items.size() >= 20) {
-        internal::PipelineProcessor pipeline(4, 8, 4, 32);
+        int total_width = 0;
+        int total_height = 0;
+        int valid_count = 0;
+
+        for (const auto& item : items) {
+            if (item.options.target_width > 0 && item.options.target_height > 0) {
+                total_width += item.options.target_width;
+                total_height += item.options.target_height;
+                valid_count++;
+            }
+        }
+
+        int avg_width = valid_count > 0 ? total_width / valid_count : 2000;
+        int avg_height = valid_count > 0 ? total_height / valid_count : 2000;
+
+        size_t queue_capacity = internal::calculate_queue_capacity(avg_width, avg_height);
+
+        internal::PipelineProcessor pipeline(4, 8, 4, queue_capacity);
         return pipeline.process_batch(items);
     }
 

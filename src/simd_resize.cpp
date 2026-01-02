@@ -86,7 +86,172 @@ static void resize_bilinear_neon_rgba(
         const uint8_t* row2 = src + y2 * src_stride;
         uint8_t* out_row = dst + y * dst_stride;
 
+        if (y + 1 < dst_h) {
+            int next_y_fp = ((y + 1) * y_ratio_fp) >> 8;
+            int next_y1 = (next_y_fp >> FRAC_BITS);
+            int next_y2 = std::min(next_y1 + 1, src_h - 1);
+            __builtin_prefetch(src + next_y1 * src_stride, 0, 3);
+            __builtin_prefetch(src + next_y2 * src_stride, 0, 3);
+        }
+
         int x = 0;
+
+        for (; x + 16 <= dst_w; x += 16) {
+            int src_x_fp[16];
+            int x1_arr[16], x2_arr[16], x_frac_arr[16];
+
+            if (x + 32 < dst_w) {
+                int prefetch_x_fp = ((x + 32) * x_ratio_fp) >> 8;
+                int prefetch_x = prefetch_x_fp >> FRAC_BITS;
+                __builtin_prefetch(row1 + prefetch_x * channels, 0, 2);
+                __builtin_prefetch(row2 + prefetch_x * channels, 0, 2);
+            }
+
+            for (int i = 0; i < 16; i++) {
+                src_x_fp[i] = ((x + i) * x_ratio_fp) >> 8;
+                x1_arr[i] = src_x_fp[i] >> FRAC_BITS;
+                x2_arr[i] = std::min(x1_arr[i] + 1, src_w - 1);
+                x_frac_arr[i] = src_x_fp[i] & (FRAC_ONE - 1);
+            }
+
+            if (channels == 4) {
+                for (int i = 0; i < 16; i++) {
+                    uint8x8_t tl = vld1_u8(row1 + x1_arr[i] * 4);
+                    uint8x8_t tr = vld1_u8(row1 + x2_arr[i] * 4);
+                    uint8x8_t bl = vld1_u8(row2 + x1_arr[i] * 4);
+                    uint8x8_t br = vld1_u8(row2 + x2_arr[i] * 4);
+
+                    int16x8_t tl16 = vreinterpretq_s16_u16(vmovl_u8(tl));
+                    int16x8_t tr16 = vreinterpretq_s16_u16(vmovl_u8(tr));
+                    int16x8_t bl16 = vreinterpretq_s16_u16(vmovl_u8(bl));
+                    int16x8_t br16 = vreinterpretq_s16_u16(vmovl_u8(br));
+
+                    int16_t wx2 = x_frac_arr[i];
+                    int16_t wx1 = FRAC_ONE - wx2;
+                    int16x8_t wx1_vec = vdupq_n_s16(wx1);
+                    int16x8_t wx2_vec = vdupq_n_s16(wx2);
+
+                    int16x8_t top = vaddq_s16(
+                        vmulq_s16(tl16, wx1_vec),
+                        vmulq_s16(tr16, wx2_vec)
+                    );
+                    int16x8_t bottom = vaddq_s16(
+                        vmulq_s16(bl16, wx1_vec),
+                        vmulq_s16(br16, wx2_vec)
+                    );
+
+                    top = vshrq_n_s16(top, FRAC_BITS);
+                    bottom = vshrq_n_s16(bottom, FRAC_BITS);
+
+                    int16x8_t result = vaddq_s16(
+                        vmulq_s16(top, wy1_vec),
+                        vmulq_s16(bottom, wy2_vec)
+                    );
+                    result = vshrq_n_s16(result, FRAC_BITS);
+
+                    uint8x8_t result8 = vqmovun_s16(result);
+
+                    vst1_lane_u32((uint32_t*)(out_row + (x + i) * 4),
+                                  vreinterpret_u32_u8(result8), 0);
+                }
+            } else if (channels == 3) {
+                for (int i = 0; i < 16; i++) {
+                    const uint8_t* p_tl = row1 + x1_arr[i] * 3;
+                    const uint8_t* p_tr = row1 + x2_arr[i] * 3;
+                    const uint8_t* p_bl = row2 + x1_arr[i] * 3;
+                    const uint8_t* p_br = row2 + x2_arr[i] * 3;
+
+                    int16_t wx2 = x_frac_arr[i];
+                    int16_t wx1 = FRAC_ONE - wx2;
+                    int16_t wy1 = FRAC_ONE - y_frac;
+                    int16_t wy2 = y_frac;
+
+                    uint8_t* out = out_row + (x + i) * 3;
+
+                    for (int c = 0; c < 3; c++) {
+                        int top = (p_tl[c] * wx1 + p_tr[c] * wx2) >> FRAC_BITS;
+                        int bottom = (p_bl[c] * wx1 + p_br[c] * wx2) >> FRAC_BITS;
+                        int val = (top * wy1 + bottom * wy2) >> FRAC_BITS;
+                        out[c] = (uint8_t)std::min(std::max(val, 0), 255);
+                    }
+                }
+            }
+        }
+
+        for (; x + 8 <= dst_w; x += 8) {
+            int src_x_fp[8];
+            int x1_arr[8], x2_arr[8], x_frac_arr[8];
+
+            for (int i = 0; i < 8; i++) {
+                src_x_fp[i] = ((x + i) * x_ratio_fp) >> 8;
+                x1_arr[i] = src_x_fp[i] >> FRAC_BITS;
+                x2_arr[i] = std::min(x1_arr[i] + 1, src_w - 1);
+                x_frac_arr[i] = src_x_fp[i] & (FRAC_ONE - 1);
+            }
+
+            if (channels == 4) {
+                for (int i = 0; i < 8; i++) {
+                    uint8x8_t tl = vld1_u8(row1 + x1_arr[i] * 4);
+                    uint8x8_t tr = vld1_u8(row1 + x2_arr[i] * 4);
+                    uint8x8_t bl = vld1_u8(row2 + x1_arr[i] * 4);
+                    uint8x8_t br = vld1_u8(row2 + x2_arr[i] * 4);
+
+                    int16x8_t tl16 = vreinterpretq_s16_u16(vmovl_u8(tl));
+                    int16x8_t tr16 = vreinterpretq_s16_u16(vmovl_u8(tr));
+                    int16x8_t bl16 = vreinterpretq_s16_u16(vmovl_u8(bl));
+                    int16x8_t br16 = vreinterpretq_s16_u16(vmovl_u8(br));
+
+                    int16_t wx2 = x_frac_arr[i];
+                    int16_t wx1 = FRAC_ONE - wx2;
+                    int16x8_t wx1_vec = vdupq_n_s16(wx1);
+                    int16x8_t wx2_vec = vdupq_n_s16(wx2);
+
+                    int16x8_t top = vaddq_s16(
+                        vmulq_s16(tl16, wx1_vec),
+                        vmulq_s16(tr16, wx2_vec)
+                    );
+                    int16x8_t bottom = vaddq_s16(
+                        vmulq_s16(bl16, wx1_vec),
+                        vmulq_s16(br16, wx2_vec)
+                    );
+
+                    top = vshrq_n_s16(top, FRAC_BITS);
+                    bottom = vshrq_n_s16(bottom, FRAC_BITS);
+
+                    int16x8_t result = vaddq_s16(
+                        vmulq_s16(top, wy1_vec),
+                        vmulq_s16(bottom, wy2_vec)
+                    );
+                    result = vshrq_n_s16(result, FRAC_BITS);
+
+                    uint8x8_t result8 = vqmovun_s16(result);
+
+                    vst1_lane_u32((uint32_t*)(out_row + (x + i) * 4),
+                                  vreinterpret_u32_u8(result8), 0);
+                }
+            } else if (channels == 3) {
+                for (int i = 0; i < 8; i++) {
+                    const uint8_t* p_tl = row1 + x1_arr[i] * 3;
+                    const uint8_t* p_tr = row1 + x2_arr[i] * 3;
+                    const uint8_t* p_bl = row2 + x1_arr[i] * 3;
+                    const uint8_t* p_br = row2 + x2_arr[i] * 3;
+
+                    int16_t wx2 = x_frac_arr[i];
+                    int16_t wx1 = FRAC_ONE - wx2;
+                    int16_t wy1 = FRAC_ONE - y_frac;
+                    int16_t wy2 = y_frac;
+
+                    uint8_t* out = out_row + (x + i) * 3;
+
+                    for (int c = 0; c < 3; c++) {
+                        int top = (p_tl[c] * wx1 + p_tr[c] * wx2) >> FRAC_BITS;
+                        int bottom = (p_bl[c] * wx1 + p_br[c] * wx2) >> FRAC_BITS;
+                        int val = (top * wy1 + bottom * wy2) >> FRAC_BITS;
+                        out[c] = (uint8_t)std::min(std::max(val, 0), 255);
+                    }
+                }
+            }
+        }
 
         for (; x + 4 <= dst_w; x += 4) {
             int src_x_fp[4];
@@ -207,6 +372,11 @@ static void resize_area_neon(
         int sy_end = std::min((int)((dy + 1) * y_scale), src_h);
         int y_count = sy_end - sy_start;
         if (y_count < 1) y_count = 1;
+
+        if (dy + 1 < dst_h) {
+            int next_sy_start = (int)((dy + 1) * y_scale);
+            __builtin_prefetch(src + next_sy_start * src_stride, 0, 3);
+        }
 
         uint8_t* out_row = dst + dy * dst_stride;
 

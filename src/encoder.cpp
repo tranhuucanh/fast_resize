@@ -310,35 +310,82 @@ bool encode_png(const std::string& path, const ImageData& data, int quality) {
 }
 
 bool encode_webp(const std::string& path, const ImageData& data, int quality) {
-    uint8_t* output = nullptr;
-    size_t output_size = 0;
-
-    if (data.channels == 4) {
-        output_size = WebPEncodeRGBA(data.pixels, data.width, data.height,
-                                     data.width * 4, quality, &output);
-    } else if (data.channels == 3) {
-        output_size = WebPEncodeRGB(data.pixels, data.width, data.height,
-                                    data.width * 3, quality, &output);
-    } else {
+    WebPConfig config;
+    if (!WebPConfigInit(&config)) {
+        set_last_error(ENCODE_ERROR, "Failed to initialize WebP config");
         return false;
     }
 
-    if (output_size == 0 || !output) {
-        if (output) WebPFree(output);
+    config.quality = quality;
+    config.method = 4;
+    config.thread_level = 1;
+    config.preprocessing = 0;
+
+    if (!WebPValidateConfig(&config)) {
+        set_last_error(ENCODE_ERROR, "Invalid WebP config");
+        return false;
+    }
+
+    WebPPicture picture;
+    if (!WebPPictureInit(&picture)) {
+        set_last_error(ENCODE_ERROR, "Failed to initialize WebP picture");
+        return false;
+    }
+
+    picture.width = data.width;
+    picture.height = data.height;
+    picture.use_argb = 0;
+
+    WebPMemoryWriter writer;
+    WebPMemoryWriterInit(&writer);
+    picture.writer = WebPMemoryWrite;
+    picture.custom_ptr = &writer;
+
+    bool import_success = false;
+    if (data.channels == 4) {
+        import_success = WebPPictureImportRGBA(&picture, data.pixels, data.width * 4);
+    } else if (data.channels == 3) {
+        import_success = WebPPictureImportRGB(&picture, data.pixels, data.width * 3);
+    } else {
+        set_last_error(ENCODE_ERROR, "WebP requires 3 or 4 channels");
+        WebPPictureFree(&picture);
+        return false;
+    }
+
+    if (!import_success) {
+        set_last_error(ENCODE_ERROR, "Failed to import pixels for WebP encoding");
+        WebPPictureFree(&picture);
+        WebPMemoryWriterClear(&writer);
+        return false;
+    }
+
+    bool encode_success = WebPEncode(&config, &picture);
+    WebPPictureFree(&picture);
+
+    if (!encode_success) {
+        set_last_error(ENCODE_ERROR, "WebP encoding failed");
+        WebPMemoryWriterClear(&writer);
         return false;
     }
 
     FILE* fp = fopen(path.c_str(), "wb");
     if (!fp) {
-        WebPFree(output);
+        set_last_error(ENCODE_ERROR, "Failed to open file for writing: " + path);
+        WebPMemoryWriterClear(&writer);
         return false;
     }
 
-    size_t written = fwrite(output, 1, output_size, fp);
+    size_t expected_size = writer.size;
+    size_t written = fwrite(writer.mem, 1, writer.size, fp);
     fclose(fp);
-    WebPFree(output);
+    WebPMemoryWriterClear(&writer);
 
-    return written == output_size;
+    if (written != expected_size) {
+        set_last_error(ENCODE_ERROR, "Failed to write WebP file: " + path);
+        return false;
+    }
+
+    return true;
 }
 
 bool encode_image(const std::string& path, const ImageData& data, ImageFormat format, int quality, BufferPool* buffer_pool) {

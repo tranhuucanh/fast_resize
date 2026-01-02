@@ -231,7 +231,7 @@ static void jpeg_error_exit(j_common_ptr cinfo) {
     longjmp(myerr->setjmp_buffer, 1);
 }
 
-ImageData decode_jpeg(const std::string& path) {
+ImageData decode_jpeg(const std::string& path, int target_width = 0, int target_height = 0) {
     ImageData data;
     data.pixels = nullptr;
     data.width = 0;
@@ -258,6 +258,32 @@ ImageData decode_jpeg(const std::string& path) {
         jpeg_create_decompress(&cinfo);
         jpeg_stdio_src(&cinfo, infile);
         jpeg_read_header(&cinfo, TRUE);
+
+        if (target_width > 0 && target_width < (int)cinfo.image_width) {
+            int scale_factor = cinfo.image_width / target_width;
+            if (scale_factor >= 8) {
+                cinfo.scale_num = 1;
+                cinfo.scale_denom = 8;
+            } else if (scale_factor >= 4) {
+                cinfo.scale_num = 1;
+                cinfo.scale_denom = 4;
+            } else if (scale_factor >= 2) {
+                cinfo.scale_num = 1;
+                cinfo.scale_denom = 2;
+            }
+        } else if (target_height > 0 && target_height < (int)cinfo.image_height) {
+            int scale_factor = cinfo.image_height / target_height;
+            if (scale_factor >= 8) {
+                cinfo.scale_num = 1;
+                cinfo.scale_denom = 8;
+            } else if (scale_factor >= 4) {
+                cinfo.scale_num = 1;
+                cinfo.scale_denom = 4;
+            } else if (scale_factor >= 2) {
+                cinfo.scale_num = 1;
+                cinfo.scale_denom = 2;
+            }
+        }
 
         cinfo.dct_method = JDCT_IFAST;
         cinfo.do_fancy_upsampling = FALSE;
@@ -298,6 +324,32 @@ ImageData decode_jpeg(const std::string& path) {
     jpeg_create_decompress(&cinfo);
     jpeg_mem_src(&cinfo, (unsigned char*)mapped.data, mapped.size);
     jpeg_read_header(&cinfo, TRUE);
+
+    if (target_width > 0 && target_width < (int)cinfo.image_width) {
+        int scale_factor = cinfo.image_width / target_width;
+        if (scale_factor >= 8) {
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 8;
+        } else if (scale_factor >= 4) {
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 4;
+        } else if (scale_factor >= 2) {
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 2;
+        }
+    } else if (target_height > 0 && target_height < (int)cinfo.image_height) {
+        int scale_factor = cinfo.image_height / target_height;
+        if (scale_factor >= 8) {
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 8;
+        } else if (scale_factor >= 4) {
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 4;
+        } else if (scale_factor >= 2) {
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 2;
+        }
+    }
 
     cinfo.dct_method = JDCT_IFAST;
     cinfo.do_fancy_upsampling = FALSE;
@@ -552,7 +604,7 @@ ImageData decode_webp(const std::string& path) {
 // Image Decoding
 // ============================================
 
-ImageData decode_image(const std::string& path, ImageFormat format) {
+ImageData decode_image(const std::string& path, ImageFormat format, int target_width, int target_height) {
     ImageData data;
     data.pixels = nullptr;
     data.width = 0;
@@ -561,7 +613,7 @@ ImageData decode_image(const std::string& path, ImageFormat format) {
 
     switch (format) {
         case FORMAT_JPEG:
-            return decode_jpeg(path);
+            return decode_jpeg(path, target_width, target_height);
         case FORMAT_PNG:
             return decode_png(path);
         case FORMAT_WEBP:

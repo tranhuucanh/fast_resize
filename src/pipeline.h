@@ -139,6 +139,18 @@ struct ResizeResult {
     std::string error_message;
 };
 
+inline size_t calculate_queue_capacity(int avg_width, int avg_height) {
+    size_t avg_size = static_cast<size_t>(avg_width) * avg_height * 4;
+
+    const size_t target_memory = 200 * 1024 * 1024;
+    size_t capacity = target_memory / (avg_size * 2);
+
+    if (capacity < 8) capacity = 8;
+    if (capacity > 32) capacity = 32;
+
+    return capacity;
+}
+
 class PipelineProcessor {
 public:
     PipelineProcessor(

@@ -70,7 +70,7 @@ struct ImageData {
     int channels;
 };
 
-ImageData decode_image(const std::string& path, ImageFormat format);
+ImageData decode_image(const std::string& path, ImageFormat format, int target_width = 0, int target_height = 0);
 void free_image_data(ImageData& data);
 bool get_image_dimensions(const std::string& path, int& width, int& height, int& channels);
 
