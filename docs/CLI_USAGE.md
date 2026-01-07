@@ -132,7 +132,9 @@ fast_resize input.jpg output.jpg --scale 2.0
 
 Process multiple images at once using multi-threaded processing.
 
-### 📂 Batch Resize Directory
+### 📂 Mode 1: Batch Resize Directory
+
+Resize **all images** in a directory.
 
 ```bash
 # Resize all images in directory
@@ -145,7 +147,24 @@ fast_resize batch input_dir/ output_dir/ --width 800 --height 600
 fast_resize batch input_dir/ output_dir/ --scale 0.5
 ```
 
-### Batch Options
+### 📋 Mode 2: Batch Resize Specific Files
+
+Resize **specific files** by reading paths from stdin (NULL-separated).
+
+```bash
+# Method 1: Using printf with NULL separator
+printf 'photo1.jpg\0photo2.jpg\0photo3.jpg' | fast_resize batch --stdin output_dir/ -w 800
+
+# Method 2: Using find command
+find photos/ -name "*.jpg" -print0 | fast_resize batch --stdin thumbnails/ -w 800
+
+# Method 3: From a file list (convert newlines to NULL)
+cat files.txt | tr '\n' '\0' | fast_resize batch --stdin output_dir/ -w 800
+```
+
+> **Note:** File paths are separated by NULL character (`\0`) to safely handle paths with spaces or special characters.
+
+### ⚙️ Batch Options
 
 ```bash
 # Set number of threads (default: auto-detect)
@@ -156,20 +175,9 @@ fast_resize batch input_dir/ output_dir/ --width 800 --stop-on-error
 
 # Maximum speed mode (uses more RAM)
 fast_resize batch input_dir/ output_dir/ --width 800 --max-speed
-```
 
-### 📋 Batch with File List
-
-```bash
-# Create file list
-cat > files.txt << EOF
-/path/to/image1.jpg
-/path/to/image2.png
-/path/to/image3.webp
-EOF
-
-# Process from file list
-fast_resize batch --file-list files.txt output_dir/ --width 800
+# Combine --stdin with other options
+printf 'a.jpg\0b.jpg' | fast_resize batch --stdin output_dir/ -w 800 -q 90 --max-speed
 ```
 
 ---
@@ -220,6 +228,7 @@ fast_resize input.webp output.jpg 800
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `--stdin` | false | Read file paths from stdin (NULL-separated) |
 | `--threads` | auto | Number of threads |
 | `--stop-on-error` | false | Stop on first error |
 | `--max-speed` | false | Enable pipeline mode |

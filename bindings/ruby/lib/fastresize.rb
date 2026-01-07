@@ -158,7 +158,7 @@ module FastResize
 
   # Batch resize images to a directory with same options
   #
-  # @param input_paths [Array<String>] Array of input image paths
+  # @param input [String, Array<String>] Input directory path OR array of input image paths
   # @param output_dir [String] Output directory
   # @param options [Hash] Resize options plus batch options
   # @option options [Integer] :threads Number of threads (default: auto)
@@ -166,12 +166,16 @@ module FastResize
   # @option options [Boolean] :max_speed Enable pipeline mode (default: false)
   # @return [Hash] Result with :total, :success, :failed, :errors
   #
-  # @example Batch resize
-  #   files = Dir["photos/*.jpg"]
-  #   result = FastResize.batch_resize(files, "thumbnails/", width: 300)
+  # @example Batch resize from directory
+  #   result = FastResize.batch_resize("photos/", "thumbnails/", width: 300)
   #   # => { total: 100, success: 100, failed: 0, errors: [] }
-  def self.batch_resize(input_paths, output_dir, options = {})
-    raise Error, "Input paths cannot be empty" if input_paths.nil? || input_paths.empty?
+  #
+  # @example Batch resize specific files
+  #   files = ["photo1.jpg", "photo2.jpg", "photo3.jpg"]
+  #   result = FastResize.batch_resize(files, "thumbnails/", width: 300)
+  #   # => { total: 3, success: 3, failed: 0, errors: [] }
+  def self.batch_resize(input, output_dir, options = {})
+    raise Error, "Input cannot be empty" if input.nil? || (input.respond_to?(:empty?) && input.empty?)
     raise Error, "Output directory cannot be empty" if output_dir.nil? || output_dir.empty?
 
     # Create output directory if it doesn't exist
@@ -180,29 +184,59 @@ module FastResize
 
     cli_path = Platform.find_binary
 
-    # Create temp file with input paths for batch mode
-    require 'tempfile'
-    temp_dir = Tempfile.new(['fastresize_batch', ''])
-    temp_dir_path = temp_dir.path
-    temp_dir.close
-    temp_dir.unlink
+    if input.is_a?(String)
+      batch_resize_folder(cli_path, input, output_dir, options)
+    elsif input.is_a?(Array)
+      batch_resize_files(cli_path, input, output_dir, options)
+    else
+      raise Error, "Input must be a directory path (String) or array of file paths (Array)"
+    end
+  end
 
-    # Copy input files to temp directory (simulate batch input)
-    # Actually, use the batch command directly
+  private
+
+  def self.batch_resize_folder(cli_path, input_dir, output_dir, options)
+    raise Error, "Input directory not found: #{input_dir}" unless File.directory?(input_dir)
+
     args = ['batch']
     args += build_batch_args(options)
-
-    # Get the input directory from the first file
-    input_dir = File.dirname(input_paths.first)
     args << input_dir
     args << output_dir
 
     output = `#{cli_path} #{args.map { |a| "'#{a}'" }.join(' ')} 2>&1`
     success = $?.success?
 
-    # Parse output
+    parse_batch_result(output, success, nil)
+  end
+
+  def self.batch_resize_files(cli_path, input_paths, output_dir, options)
+    require 'open3'
+
+    input_paths.each do |path|
+      raise Error, "Input file not found: #{path}" unless File.exist?(path)
+    end
+
+    args = ['batch', '--stdin']
+    args += build_batch_args(options)
+    args << output_dir
+
+    output = ""
+    success = false
+
+    Open3.popen3(cli_path, *args) do |stdin, stdout, stderr, wait_thr|
+      input_paths.each { |path| stdin.write("#{path}\0") }
+      stdin.close
+
+      output = stdout.read + stderr.read
+      success = wait_thr.value.success?
+    end
+
+    parse_batch_result(output, success, input_paths.length)
+  end
+
+  def self.parse_batch_result(output, success, expected_total)
     result = {
-      total: input_paths.length,
+      total: expected_total || 0,
       success: 0,
       failed: 0,
       errors: []
@@ -210,6 +244,9 @@ module FastResize
 
     if success
       # Parse success/failed from output
+      if output =~ /Processing (\d+) images/
+        result[:total] = $1.to_i if expected_total.nil?
+      end
       if output =~ /(\d+) success/
         result[:success] = $1.to_i
       end
@@ -217,12 +254,14 @@ module FastResize
         result[:failed] = $1.to_i
       end
     else
-      result[:failed] = input_paths.length
+      result[:failed] = result[:total]
       result[:errors] << output.strip
     end
 
     result
   end
+
+  public
 
   # Batch resize with custom options per image
   #

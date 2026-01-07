@@ -62,10 +62,11 @@ void print_usage(const char* program_name) {
     std::cout << "FastResize v" << get_version() << " - The Fastest Image Resizing Library\n\n";
     std::cout << "Usage: " << program_name << " [OPTIONS] <input> <output> [width] [height]\n";
     std::cout << "       " << program_name << " batch [OPTIONS] <input_dir> <output_dir>\n";
+    std::cout << "       " << program_name << " batch --stdin [OPTIONS] <output_dir>\n";
     std::cout << "       " << program_name << " info <image>\n\n";
     std::cout << "Commands:\n";
     std::cout << "  (default)     Resize single image\n";
-    std::cout << "  batch         Batch resize all images in directory\n";
+    std::cout << "  batch         Batch resize images (from directory or stdin)\n";
     std::cout << "  info          Show image information\n\n";
     std::cout << "Resize Options:\n";
     std::cout << "  -w, --width WIDTH       Target width in pixels\n";
@@ -77,6 +78,7 @@ void print_usage(const char* program_name) {
     std::cout << "  --no-aspect-ratio       Don't maintain aspect ratio\n";
     std::cout << "  -o, --overwrite         Overwrite input file\n\n";
     std::cout << "Batch Options:\n";
+    std::cout << "  --stdin                 Read file paths from stdin (NULL-separated)\n";
     std::cout << "  -t, --threads NUM       Number of threads (default: auto)\n";
     std::cout << "  --stop-on-error         Stop on first error\n";
     std::cout << "  --max-speed             Enable pipeline mode (uses more RAM)\n\n";
@@ -94,6 +96,8 @@ void print_usage(const char* program_name) {
     std::cout << "  " << program_name << " input.jpg output.jpg -s 0.5\n\n";
     std::cout << "  # Batch resize directory\n";
     std::cout << "  " << program_name << " batch photos/ thumbnails/ -w 800\n\n";
+    std::cout << "  # Batch resize specific files (from stdin, NULL-separated)\n";
+    std::cout << "  printf 'a.jpg\\0b.jpg\\0c.jpg' | " << program_name << " batch --stdin thumbnails/ -w 800\n\n";
     std::cout << "  # Batch with max speed\n";
     std::cout << "  " << program_name << " batch photos/ thumbnails/ -w 800 --max-speed\n\n";
     std::cout << "  # Show image info\n";
@@ -228,18 +232,39 @@ int cmd_info(const std::string& image_path) {
     return 0;
 }
 
-// Command: batch resize
-int cmd_batch(int argc, char* argv[]) {
-    if (argc < 4) {
-        std::cerr << "Error: batch command requires input_dir and output_dir\n";
-        std::cerr << "Usage: " << argv[0] << " batch [OPTIONS] <input_dir> <output_dir>\n";
-        return 1;
+// Read file paths from stdin (NULL-separated)
+// Returns true if successful, false on error
+bool read_paths_from_stdin(std::vector<std::string>& files) {
+    std::string path;
+    char c;
+
+    // Read character by character, split on NULL
+    while (std::cin.get(c)) {
+        if (c == '\0') {
+            if (!path.empty()) {
+                files.push_back(path);
+                path.clear();
+            }
+        } else {
+            path += c;
+        }
     }
 
+    // Handle last path if no trailing NULL
+    if (!path.empty()) {
+        files.push_back(path);
+    }
+
+    return true;
+}
+
+// Command: batch resize
+int cmd_batch(int argc, char* argv[]) {
     fastresize::ResizeOptions resize_opts;
     fastresize::BatchOptions batch_opts;
     std::string input_dir;
     std::string output_dir;
+    bool use_stdin = false;
 
     // Parse arguments
     for (int i = 2; i < argc; i++) {
@@ -294,6 +319,8 @@ int cmd_batch(int argc, char* argv[]) {
             }
         } else if (arg == "--no-aspect-ratio") {
             resize_opts.keep_aspect_ratio = false;
+        } else if (arg == "--stdin") {
+            use_stdin = true;
         } else if (arg == "-t" || arg == "--threads") {
             if (++i >= argc) {
                 std::cerr << "Error: " << arg << " requires an argument\n";
@@ -312,20 +339,41 @@ int cmd_batch(int argc, char* argv[]) {
             return 1;
         } else {
             // Non-option arguments
-            if (input_dir.empty()) {
-                input_dir = arg;
-            } else if (output_dir.empty()) {
-                output_dir = arg;
+            if (use_stdin) {
+                // In stdin mode, only output_dir is needed
+                if (output_dir.empty()) {
+                    output_dir = arg;
+                } else {
+                    std::cerr << "Error: Too many arguments (stdin mode only needs output_dir)\n";
+                    return 1;
+                }
             } else {
-                std::cerr << "Error: Too many arguments\n";
-                return 1;
+                // In folder mode, need input_dir and output_dir
+                if (input_dir.empty()) {
+                    input_dir = arg;
+                } else if (output_dir.empty()) {
+                    output_dir = arg;
+                } else {
+                    std::cerr << "Error: Too many arguments\n";
+                    return 1;
+                }
             }
         }
     }
 
-    if (input_dir.empty() || output_dir.empty()) {
-        std::cerr << "Error: Missing input_dir or output_dir\n";
-        return 1;
+    // Validate arguments based on mode
+    if (use_stdin) {
+        if (output_dir.empty()) {
+            std::cerr << "Error: Missing output_dir\n";
+            std::cerr << "Usage: " << argv[0] << " batch --stdin [OPTIONS] <output_dir>\n";
+            return 1;
+        }
+    } else {
+        if (input_dir.empty() || output_dir.empty()) {
+            std::cerr << "Error: Missing input_dir or output_dir\n";
+            std::cerr << "Usage: " << argv[0] << " batch [OPTIONS] <input_dir> <output_dir>\n";
+            return 1;
+        }
     }
 
     // Determine resize mode based on what was specified
@@ -342,14 +390,28 @@ int cmd_batch(int argc, char* argv[]) {
         }
     }
 
-    // Get all image files
+    // Get input files based on mode
     std::vector<std::string> input_files;
-    if (!get_image_files(input_dir, input_files)) {
-        return 1;
+
+    if (use_stdin) {
+        // Read file paths from stdin (NULL-separated)
+        if (!read_paths_from_stdin(input_files)) {
+            std::cerr << "Error: Failed to read file paths from stdin\n";
+            return 1;
+        }
+    } else {
+        // Read all image files from directory
+        if (!get_image_files(input_dir, input_files)) {
+            return 1;
+        }
     }
 
     if (input_files.empty()) {
-        std::cerr << "Error: No image files found in " << input_dir << std::endl;
+        if (use_stdin) {
+            std::cerr << "Error: No file paths received from stdin\n";
+        } else {
+            std::cerr << "Error: No image files found in " << input_dir << std::endl;
+        }
         return 1;
     }
 

@@ -257,6 +257,9 @@ fast_resize input.jpg output.jpg 800 600
 # Batch resize all images in directory
 fast_resize batch input_dir/ output_dir/ --width 800
 
+# Batch resize specific files (from stdin, NULL-separated)
+printf 'photo1.jpg\0photo2.jpg\0photo3.jpg' | fast_resize batch --stdin output_dir/ -w 800
+
 # Convert format (JPG → PNG)
 fast_resize input.jpg output.png 800
 ```
@@ -279,13 +282,17 @@ FastResize.resize('input.jpg', 'output.jpg',
   filter: :catmull_rom
 )
 
-# Batch resize (multi-threaded)
-files = Dir['images/*.jpg']
+# Batch resize - all images in directory
+result = FastResize.batch_resize('images/', 'output/', width: 800)
+puts "Processed: #{result[:success]}/#{result[:total]}"
+
+# Batch resize - specific files only
+files = ['photo1.jpg', 'photo2.jpg', 'photo3.jpg']
 result = FastResize.batch_resize(files, 'output/', width: 800)
 puts "Processed: #{result[:success]}/#{result[:total]}"
 
 # Maximum speed mode (uses more RAM)
-FastResize.batch_resize(files, 'output/',
+FastResize.batch_resize('images/', 'output/',
   width: 800,
   max_speed: true
 )

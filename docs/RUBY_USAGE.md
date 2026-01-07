@@ -61,8 +61,11 @@ require 'fastresize'
 # Resize single image
 FastResize.resize('input.jpg', 'output.jpg', width: 800)
 
-# Batch resize
-files = Dir['images/*.jpg']
+# Batch resize - all images in directory
+FastResize.batch_resize('images/', 'thumbnails/', width: 200)
+
+# Batch resize - specific files only
+files = ['photo1.jpg', 'photo2.jpg', 'photo3.jpg']
 FastResize.batch_resize(files, 'thumbnails/', width: 200)
 ```
 
@@ -135,14 +138,13 @@ FastResize.resize('photo.jpg', 'photo.jpg',
 
 ## ⚡ Batch Processing
 
-### 📦 Basic Batch Resize
+### 📂 Mode 1: Batch Resize Directory
+
+Resize **all images** in a directory:
 
 ```ruby
-# Get all images
-files = Dir['images/*.jpg']
-
-# Resize all to width 800
-result = FastResize.batch_resize(files, 'output/', width: 800)
+# Resize all images in directory
+result = FastResize.batch_resize('images/', 'output/', width: 800)
 
 puts "Total: #{result[:total]}"
 puts "Success: #{result[:success]}"
@@ -150,9 +152,35 @@ puts "Failed: #{result[:failed]}"
 result[:errors].each { |e| puts "Error: #{e}" }
 ```
 
+### 📋 Mode 2: Batch Resize Specific Files
+
+Resize **specific files** only:
+
+```ruby
+# Select specific files
+files = ['photo1.jpg', 'photo2.jpg', 'photo3.jpg']
+
+# Or use glob pattern
+files = Dir['images/*.jpg'].first(10)  # Only first 10 images
+
+# Resize only selected files
+result = FastResize.batch_resize(files, 'output/', width: 800)
+
+puts "Processed: #{result[:success]}/#{result[:total]}"
+```
+
 ### ⚙️ Batch with Options
 
 ```ruby
+# Works with both directory and file array
+result = FastResize.batch_resize('images/', 'output/',
+  width: 800,
+  height: 600,
+  quality: 90,
+  filter: :mitchell
+)
+
+# Or with specific files
 result = FastResize.batch_resize(files, 'output/',
   width: 800,
   height: 600,
