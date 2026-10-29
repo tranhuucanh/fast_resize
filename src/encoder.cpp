@@ -341,16 +341,56 @@ bool encode_webp(const std::string& path, const ImageData& data, int quality) {
     picture.writer = WebPMemoryWrite;
     picture.custom_ptr = &writer;
 
+    // libwebp imports RGB or RGBA only. Grayscale is expanded here and released
+    // before encode, so color images keep the existing path and buffer.
+    const unsigned char* webp_pixels = data.pixels;
+    int webp_channels = data.channels;
+    unsigned char* expanded = nullptr;
+
+    if (data.channels == 1 || data.channels == 2) {
+        size_t count = static_cast<size_t>(data.width) * data.height;
+        webp_channels = (data.channels == 1) ? 3 : 4;
+        expanded = new unsigned char[count * webp_channels];
+        if (data.channels == 1) {
+            unsigned char* dst = expanded;
+            for (size_t i = 0; i < count; i++) {
+                unsigned char gray = data.pixels[i];
+                dst[0] = gray;
+                dst[1] = gray;
+                dst[2] = gray;
+                dst += 3;
+            }
+        } else {
+            unsigned char* dst = expanded;
+            const unsigned char* src = data.pixels;
+            for (size_t i = 0; i < count; i++) {
+                unsigned char gray = src[0];
+                dst[0] = gray;
+                dst[1] = gray;
+                dst[2] = gray;
+                dst[3] = src[1];
+                src += 2;
+                dst += 4;
+            }
+        }
+        webp_pixels = expanded;
+    }
+
     bool import_success = false;
-    if (data.channels == 4) {
-        import_success = WebPPictureImportRGBA(&picture, data.pixels, data.width * 4);
-    } else if (data.channels == 3) {
-        import_success = WebPPictureImportRGB(&picture, data.pixels, data.width * 3);
+    if (webp_channels == 4) {
+        import_success = WebPPictureImportRGBA(&picture, webp_pixels, data.width * 4);
+    } else if (webp_channels == 3) {
+        import_success = WebPPictureImportRGB(&picture, webp_pixels, data.width * 3);
     } else {
-        set_last_error(ENCODE_ERROR, "WebP requires 3 or 4 channels");
+        delete[] expanded;
+        set_last_error(ENCODE_ERROR, "WebP requires 1, 2, 3, or 4 channels");
         WebPPictureFree(&picture);
+        WebPMemoryWriterClear(&writer);
         return false;
     }
+
+    delete[] expanded;
+    expanded = nullptr;
 
     if (!import_success) {
         set_last_error(ENCODE_ERROR, "Failed to import pixels for WebP encoding");

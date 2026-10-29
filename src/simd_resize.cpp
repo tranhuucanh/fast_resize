@@ -59,6 +59,46 @@ namespace internal {
 
 #ifdef USE_NEON
 
+// Load one RGBA pixel. A 4-byte copy avoids vld1_u8's 8-byte read, which
+// walks 4 bytes past the last pixel of a row.
+static inline int16x4_t load_rgba_s16(const uint8_t* p) {
+    uint32_t px;
+    std::memcpy(&px, p, sizeof(px));
+    uint8x8_t bytes = vreinterpret_u8_u32(vdup_n_u32(px));
+    return vget_low_s16(vreinterpretq_s16_u16(vmovl_u8(bytes)));
+}
+
+// Bilinear blend in int32. int16 multiply overflows: a weight of 256 and a
+// channel of 255 produce 65280, past the signed 16-bit max of 32767.
+// The wrapped negative value is then saturated to 0, which wipes opaque alpha.
+static inline void store_bilinear_rgba(
+    const uint8_t* row1, const uint8_t* row2,
+    int x1, int x2,
+    int wx1, int wx2,
+    int wy1, int wy2,
+    uint8_t* out
+) {
+    int16x4_t tl = load_rgba_s16(row1 + x1 * 4);
+    int16x4_t tr = load_rgba_s16(row1 + x2 * 4);
+    int16x4_t bl = load_rgba_s16(row2 + x1 * 4);
+    int16x4_t br = load_rgba_s16(row2 + x2 * 4);
+
+    int16x4_t wx1v = vdup_n_s16(static_cast<int16_t>(wx1));
+    int16x4_t wx2v = vdup_n_s16(static_cast<int16_t>(wx2));
+    int16x4_t wy1v = vdup_n_s16(static_cast<int16_t>(wy1));
+    int16x4_t wy2v = vdup_n_s16(static_cast<int16_t>(wy2));
+
+    int32x4_t top = vmlal_s16(vmull_s16(tl, wx1v), tr, wx2v);
+    int32x4_t bottom = vmlal_s16(vmull_s16(bl, wx1v), br, wx2v);
+    int16x4_t top16 = vmovn_s32(vshrq_n_s32(top, 8));
+    int16x4_t bottom16 = vmovn_s32(vshrq_n_s32(bottom, 8));
+
+    int32x4_t mixed = vmlal_s16(vmull_s16(top16, wy1v), bottom16, wy2v);
+    uint16x4_t result16 = vqmovun_s32(vshrq_n_s32(mixed, 8));
+    uint8x8_t result8 = vqmovn_u16(vcombine_u16(result16, result16));
+    vst1_lane_u32(reinterpret_cast<uint32_t*>(out), vreinterpret_u32_u8(result8), 0);
+}
+
 static void resize_bilinear_neon_rgba(
     const uint8_t* __restrict src, int src_w, int src_h,
     uint8_t* __restrict dst, int dst_w, int dst_h,
@@ -67,28 +107,28 @@ static void resize_bilinear_neon_rgba(
     const int FRAC_BITS = 8;
     const int FRAC_ONE = 1 << FRAC_BITS;
 
-    int x_ratio_fp = ((src_w - 1) << 16) / dst_w;
-    int y_ratio_fp = ((src_h - 1) << 16) / dst_h;
+    // int32 overflows once src_w > 32768: (src_w - 1) << 16 exceeds 2^31 - 1.
+    int64_t x_ratio_fp = ((int64_t)(src_w - 1) << 16) / dst_w;
+    int64_t y_ratio_fp = ((int64_t)(src_h - 1) << 16) / dst_h;
 
     int src_stride = src_w * channels;
     int dst_stride = dst_w * channels;
 
     for (int y = 0; y < dst_h; y++) {
-        int src_y_fp = (y * y_ratio_fp) >> 8;
-        int y1 = src_y_fp >> FRAC_BITS;
+        int64_t src_y_fp = ((int64_t)y * y_ratio_fp) >> 8;
+        int y1 = (int)(src_y_fp >> FRAC_BITS);
         int y2 = std::min(y1 + 1, src_h - 1);
-        int y_frac = src_y_fp & (FRAC_ONE - 1);
-
-        int16x8_t wy2_vec = vdupq_n_s16(y_frac);
-        int16x8_t wy1_vec = vdupq_n_s16(FRAC_ONE - y_frac);
+        int y_frac = (int)(src_y_fp & (FRAC_ONE - 1));
+        int wy1 = FRAC_ONE - y_frac;
+        int wy2 = y_frac;
 
         const uint8_t* row1 = src + y1 * src_stride;
         const uint8_t* row2 = src + y2 * src_stride;
         uint8_t* out_row = dst + y * dst_stride;
 
         if (y + 1 < dst_h) {
-            int next_y_fp = ((y + 1) * y_ratio_fp) >> 8;
-            int next_y1 = (next_y_fp >> FRAC_BITS);
+            int64_t next_y_fp = ((int64_t)(y + 1) * y_ratio_fp) >> 8;
+            int next_y1 = (int)(next_y_fp >> FRAC_BITS);
             int next_y2 = std::min(next_y1 + 1, src_h - 1);
             __builtin_prefetch(src + next_y1 * src_stride, 0, 3);
             __builtin_prefetch(src + next_y2 * src_stride, 0, 3);
@@ -97,62 +137,32 @@ static void resize_bilinear_neon_rgba(
         int x = 0;
 
         for (; x + 16 <= dst_w; x += 16) {
-            int src_x_fp[16];
+            int64_t src_x_fp[16];
             int x1_arr[16], x2_arr[16], x_frac_arr[16];
 
             if (x + 32 < dst_w) {
-                int prefetch_x_fp = ((x + 32) * x_ratio_fp) >> 8;
-                int prefetch_x = prefetch_x_fp >> FRAC_BITS;
+                int64_t prefetch_x_fp = ((int64_t)(x + 32) * x_ratio_fp) >> 8;
+                int prefetch_x = (int)(prefetch_x_fp >> FRAC_BITS);
                 __builtin_prefetch(row1 + prefetch_x * channels, 0, 2);
                 __builtin_prefetch(row2 + prefetch_x * channels, 0, 2);
             }
 
             for (int i = 0; i < 16; i++) {
-                src_x_fp[i] = ((x + i) * x_ratio_fp) >> 8;
-                x1_arr[i] = src_x_fp[i] >> FRAC_BITS;
+                src_x_fp[i] = ((int64_t)(x + i) * x_ratio_fp) >> 8;
+                x1_arr[i] = (int)(src_x_fp[i] >> FRAC_BITS);
                 x2_arr[i] = std::min(x1_arr[i] + 1, src_w - 1);
-                x_frac_arr[i] = src_x_fp[i] & (FRAC_ONE - 1);
+                x_frac_arr[i] = (int)(src_x_fp[i] & (FRAC_ONE - 1));
             }
 
             if (channels == 4) {
                 for (int i = 0; i < 16; i++) {
-                    uint8x8_t tl = vld1_u8(row1 + x1_arr[i] * 4);
-                    uint8x8_t tr = vld1_u8(row1 + x2_arr[i] * 4);
-                    uint8x8_t bl = vld1_u8(row2 + x1_arr[i] * 4);
-                    uint8x8_t br = vld1_u8(row2 + x2_arr[i] * 4);
-
-                    int16x8_t tl16 = vreinterpretq_s16_u16(vmovl_u8(tl));
-                    int16x8_t tr16 = vreinterpretq_s16_u16(vmovl_u8(tr));
-                    int16x8_t bl16 = vreinterpretq_s16_u16(vmovl_u8(bl));
-                    int16x8_t br16 = vreinterpretq_s16_u16(vmovl_u8(br));
-
-                    int16_t wx2 = x_frac_arr[i];
-                    int16_t wx1 = FRAC_ONE - wx2;
-                    int16x8_t wx1_vec = vdupq_n_s16(wx1);
-                    int16x8_t wx2_vec = vdupq_n_s16(wx2);
-
-                    int16x8_t top = vaddq_s16(
-                        vmulq_s16(tl16, wx1_vec),
-                        vmulq_s16(tr16, wx2_vec)
+                    int wx2 = x_frac_arr[i];
+                    int wx1 = FRAC_ONE - wx2;
+                    store_bilinear_rgba(
+                        row1, row2, x1_arr[i], x2_arr[i],
+                        wx1, wx2, wy1, wy2,
+                        out_row + (x + i) * 4
                     );
-                    int16x8_t bottom = vaddq_s16(
-                        vmulq_s16(bl16, wx1_vec),
-                        vmulq_s16(br16, wx2_vec)
-                    );
-
-                    top = vshrq_n_s16(top, FRAC_BITS);
-                    bottom = vshrq_n_s16(bottom, FRAC_BITS);
-
-                    int16x8_t result = vaddq_s16(
-                        vmulq_s16(top, wy1_vec),
-                        vmulq_s16(bottom, wy2_vec)
-                    );
-                    result = vshrq_n_s16(result, FRAC_BITS);
-
-                    uint8x8_t result8 = vqmovun_s16(result);
-
-                    vst1_lane_u32((uint32_t*)(out_row + (x + i) * 4),
-                                  vreinterpret_u32_u8(result8), 0);
                 }
             } else if (channels == 3) {
                 for (int i = 0; i < 16; i++) {
@@ -179,55 +189,25 @@ static void resize_bilinear_neon_rgba(
         }
 
         for (; x + 8 <= dst_w; x += 8) {
-            int src_x_fp[8];
+            int64_t src_x_fp[8];
             int x1_arr[8], x2_arr[8], x_frac_arr[8];
 
             for (int i = 0; i < 8; i++) {
-                src_x_fp[i] = ((x + i) * x_ratio_fp) >> 8;
-                x1_arr[i] = src_x_fp[i] >> FRAC_BITS;
+                src_x_fp[i] = ((int64_t)(x + i) * x_ratio_fp) >> 8;
+                x1_arr[i] = (int)(src_x_fp[i] >> FRAC_BITS);
                 x2_arr[i] = std::min(x1_arr[i] + 1, src_w - 1);
-                x_frac_arr[i] = src_x_fp[i] & (FRAC_ONE - 1);
+                x_frac_arr[i] = (int)(src_x_fp[i] & (FRAC_ONE - 1));
             }
 
             if (channels == 4) {
                 for (int i = 0; i < 8; i++) {
-                    uint8x8_t tl = vld1_u8(row1 + x1_arr[i] * 4);
-                    uint8x8_t tr = vld1_u8(row1 + x2_arr[i] * 4);
-                    uint8x8_t bl = vld1_u8(row2 + x1_arr[i] * 4);
-                    uint8x8_t br = vld1_u8(row2 + x2_arr[i] * 4);
-
-                    int16x8_t tl16 = vreinterpretq_s16_u16(vmovl_u8(tl));
-                    int16x8_t tr16 = vreinterpretq_s16_u16(vmovl_u8(tr));
-                    int16x8_t bl16 = vreinterpretq_s16_u16(vmovl_u8(bl));
-                    int16x8_t br16 = vreinterpretq_s16_u16(vmovl_u8(br));
-
-                    int16_t wx2 = x_frac_arr[i];
-                    int16_t wx1 = FRAC_ONE - wx2;
-                    int16x8_t wx1_vec = vdupq_n_s16(wx1);
-                    int16x8_t wx2_vec = vdupq_n_s16(wx2);
-
-                    int16x8_t top = vaddq_s16(
-                        vmulq_s16(tl16, wx1_vec),
-                        vmulq_s16(tr16, wx2_vec)
+                    int wx2 = x_frac_arr[i];
+                    int wx1 = FRAC_ONE - wx2;
+                    store_bilinear_rgba(
+                        row1, row2, x1_arr[i], x2_arr[i],
+                        wx1, wx2, wy1, wy2,
+                        out_row + (x + i) * 4
                     );
-                    int16x8_t bottom = vaddq_s16(
-                        vmulq_s16(bl16, wx1_vec),
-                        vmulq_s16(br16, wx2_vec)
-                    );
-
-                    top = vshrq_n_s16(top, FRAC_BITS);
-                    bottom = vshrq_n_s16(bottom, FRAC_BITS);
-
-                    int16x8_t result = vaddq_s16(
-                        vmulq_s16(top, wy1_vec),
-                        vmulq_s16(bottom, wy2_vec)
-                    );
-                    result = vshrq_n_s16(result, FRAC_BITS);
-
-                    uint8x8_t result8 = vqmovun_s16(result);
-
-                    vst1_lane_u32((uint32_t*)(out_row + (x + i) * 4),
-                                  vreinterpret_u32_u8(result8), 0);
                 }
             } else if (channels == 3) {
                 for (int i = 0; i < 8; i++) {
@@ -254,55 +234,25 @@ static void resize_bilinear_neon_rgba(
         }
 
         for (; x + 4 <= dst_w; x += 4) {
-            int src_x_fp[4];
+            int64_t src_x_fp[4];
             int x1_arr[4], x2_arr[4], x_frac_arr[4];
 
             for (int i = 0; i < 4; i++) {
-                src_x_fp[i] = ((x + i) * x_ratio_fp) >> 8;
-                x1_arr[i] = src_x_fp[i] >> FRAC_BITS;
+                src_x_fp[i] = ((int64_t)(x + i) * x_ratio_fp) >> 8;
+                x1_arr[i] = (int)(src_x_fp[i] >> FRAC_BITS);
                 x2_arr[i] = std::min(x1_arr[i] + 1, src_w - 1);
-                x_frac_arr[i] = src_x_fp[i] & (FRAC_ONE - 1);
+                x_frac_arr[i] = (int)(src_x_fp[i] & (FRAC_ONE - 1));
             }
 
             if (channels == 4) {
                 for (int i = 0; i < 4; i++) {
-                    uint8x8_t tl = vld1_u8(row1 + x1_arr[i] * 4);
-                    uint8x8_t tr = vld1_u8(row1 + x2_arr[i] * 4);
-                    uint8x8_t bl = vld1_u8(row2 + x1_arr[i] * 4);
-                    uint8x8_t br = vld1_u8(row2 + x2_arr[i] * 4);
-
-                    int16x8_t tl16 = vreinterpretq_s16_u16(vmovl_u8(tl));
-                    int16x8_t tr16 = vreinterpretq_s16_u16(vmovl_u8(tr));
-                    int16x8_t bl16 = vreinterpretq_s16_u16(vmovl_u8(bl));
-                    int16x8_t br16 = vreinterpretq_s16_u16(vmovl_u8(br));
-
-                    int16_t wx2 = x_frac_arr[i];
-                    int16_t wx1 = FRAC_ONE - wx2;
-                    int16x8_t wx1_vec = vdupq_n_s16(wx1);
-                    int16x8_t wx2_vec = vdupq_n_s16(wx2);
-
-                    int16x8_t top = vaddq_s16(
-                        vmulq_s16(tl16, wx1_vec),
-                        vmulq_s16(tr16, wx2_vec)
+                    int wx2 = x_frac_arr[i];
+                    int wx1 = FRAC_ONE - wx2;
+                    store_bilinear_rgba(
+                        row1, row2, x1_arr[i], x2_arr[i],
+                        wx1, wx2, wy1, wy2,
+                        out_row + (x + i) * 4
                     );
-                    int16x8_t bottom = vaddq_s16(
-                        vmulq_s16(bl16, wx1_vec),
-                        vmulq_s16(br16, wx2_vec)
-                    );
-
-                    top = vshrq_n_s16(top, FRAC_BITS);
-                    bottom = vshrq_n_s16(bottom, FRAC_BITS);
-
-                    int16x8_t result = vaddq_s16(
-                        vmulq_s16(top, wy1_vec),
-                        vmulq_s16(bottom, wy2_vec)
-                    );
-                    result = vshrq_n_s16(result, FRAC_BITS);
-
-                    uint8x8_t result8 = vqmovun_s16(result);
-
-                    vst1_lane_u32((uint32_t*)(out_row + (x + i) * 4),
-                                  vreinterpret_u32_u8(result8), 0);
                 }
             } else if (channels == 3) {
                 for (int i = 0; i < 4; i++) {
@@ -329,10 +279,10 @@ static void resize_bilinear_neon_rgba(
         }
 
         for (; x < dst_w; x++) {
-            int src_x_fp = (x * x_ratio_fp) >> 8;
-            int x1 = src_x_fp >> FRAC_BITS;
+            int64_t src_x_fp = ((int64_t)x * x_ratio_fp) >> 8;
+            int x1 = (int)(src_x_fp >> FRAC_BITS);
             int x2 = std::min(x1 + 1, src_w - 1);
-            int x_frac = src_x_fp & (FRAC_ONE - 1);
+            int x_frac = (int)(src_x_fp & (FRAC_ONE - 1));
             int x_frac_inv = FRAC_ONE - x_frac;
             int y_frac_inv = FRAC_ONE - y_frac;
 
@@ -361,6 +311,7 @@ static void resize_area_neon(
     uint8_t* __restrict dst, int dst_w, int dst_h,
     int channels
 ) {
+    // Keep float so images that already resize correctly keep the same source bins.
     float x_scale = (float)src_w / dst_w;
     float y_scale = (float)src_h / dst_h;
 
@@ -386,9 +337,13 @@ static void resize_area_neon(
             int x_count = sx_end - sx_start;
             if (x_count < 1) x_count = 1;
 
-            int pixel_count = x_count * y_count;
+            // x_count * y_count overflows int32 on a huge window, and a uint32
+            // channel sum overflows once that window holds more than 255 * n == 2^32.
+            uint64_t pixel_count = (uint64_t)x_count * (uint64_t)y_count;
+            if (pixel_count == 0) pixel_count = 1;
+            bool sum_fits_u32 = pixel_count <= 4294967295ull / 255ull;
 
-            if (channels == 4) {
+            if (channels == 4 && sum_fits_u32) {
                 uint32x4_t sum = vdupq_n_u32(0);
 
                 for (int sy = sy_start; sy < sy_end; sy++) {
@@ -418,12 +373,32 @@ static void resize_area_neon(
                 vst1q_u32(sums, sum);
 
                 uint8_t* out = out_row + dx * 4;
-                out[0] = sums[0] / pixel_count;
-                out[1] = sums[1] / pixel_count;
-                out[2] = sums[2] / pixel_count;
-                out[3] = sums[3] / pixel_count;
+                out[0] = (uint8_t)(sums[0] / pixel_count);
+                out[1] = (uint8_t)(sums[1] / pixel_count);
+                out[2] = (uint8_t)(sums[2] / pixel_count);
+                out[3] = (uint8_t)(sums[3] / pixel_count);
 
-            } else if (channels == 3) {
+            } else if (channels == 4) {
+                uint64_t sum_r = 0, sum_g = 0, sum_b = 0, sum_a = 0;
+
+                for (int sy = sy_start; sy < sy_end; sy++) {
+                    const uint8_t* src_row = src + sy * src_stride + sx_start * 4;
+                    for (int sx = 0; sx < x_count; sx++) {
+                        const uint8_t* p = src_row + sx * 4;
+                        sum_r += p[0];
+                        sum_g += p[1];
+                        sum_b += p[2];
+                        sum_a += p[3];
+                    }
+                }
+
+                uint8_t* out = out_row + dx * 4;
+                out[0] = (uint8_t)(sum_r / pixel_count);
+                out[1] = (uint8_t)(sum_g / pixel_count);
+                out[2] = (uint8_t)(sum_b / pixel_count);
+                out[3] = (uint8_t)(sum_a / pixel_count);
+
+            } else if (channels == 3 && sum_fits_u32) {
                 uint32_t sum_r = 0, sum_g = 0, sum_b = 0;
 
                 for (int sy = sy_start; sy < sy_end; sy++) {
@@ -437,12 +412,30 @@ static void resize_area_neon(
                 }
 
                 uint8_t* out = out_row + dx * 3;
-                out[0] = sum_r / pixel_count;
-                out[1] = sum_g / pixel_count;
-                out[2] = sum_b / pixel_count;
+                out[0] = (uint8_t)(sum_r / pixel_count);
+                out[1] = (uint8_t)(sum_g / pixel_count);
+                out[2] = (uint8_t)(sum_b / pixel_count);
+
+            } else if (channels == 3) {
+                uint64_t sum_r = 0, sum_g = 0, sum_b = 0;
+
+                for (int sy = sy_start; sy < sy_end; sy++) {
+                    const uint8_t* src_row = src + sy * src_stride + sx_start * 3;
+                    for (int sx = 0; sx < x_count; sx++) {
+                        const uint8_t* p = src_row + sx * 3;
+                        sum_r += p[0];
+                        sum_g += p[1];
+                        sum_b += p[2];
+                    }
+                }
+
+                uint8_t* out = out_row + dx * 3;
+                out[0] = (uint8_t)(sum_r / pixel_count);
+                out[1] = (uint8_t)(sum_g / pixel_count);
+                out[2] = (uint8_t)(sum_b / pixel_count);
 
             } else {
-                uint32_t sums[4] = {0, 0, 0, 0};
+                uint64_t sums[4] = {0, 0, 0, 0};
 
                 for (int sy = sy_start; sy < sy_end; sy++) {
                     const uint8_t* src_row = src + sy * src_stride + sx_start * channels;
@@ -456,7 +449,7 @@ static void resize_area_neon(
 
                 uint8_t* out = out_row + dx * channels;
                 for (int c = 0; c < channels; c++) {
-                    out[c] = sums[c] / pixel_count;
+                    out[c] = (uint8_t)(sums[c] / pixel_count);
                 }
             }
         }
